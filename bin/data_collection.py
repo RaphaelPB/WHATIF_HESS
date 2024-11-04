@@ -20,8 +20,8 @@ import pickle
 import locale
 #set decimal and separator (for handling of csv files)
 #the automatic set up of decimals seems to not work from servers
-langlocale = locale.getdefaultlocale()[0]
-locale.setlocale(locale.LC_ALL, langlocale)
+#langlocale = locale.getdefaultlocale()[0]
+#locale.setlocale(locale.LC_ALL, langlocale)
 CSVDECIMAL = locale.localeconv()['decimal_point']
 CSVSEPARATOR = ','
 if CSVDECIMAL == ',':
@@ -143,16 +143,16 @@ class Database():
                         if scenor.isdigit() and scenor not in scens: #specific case where the scenario indicator is a number
                             scenor=int(scenor)
                         #extract reference scenario
-                        val=Data.xs(scenor,level=0).stack(dropna=False).to_dict()
+                        val=Data.xs(scenor,level=0).stack(future_stack=True).to_dict()
                         #update with modifications to orginal scenario
-                        val.update(Data.xs(scen,level=0).stack(dropna=False).to_dict())
+                        val.update(Data.xs(scen,level=0).stack(future_stack=True).to_dict())
                         tempdic[scenup]=val
                     else:
-                        tempdic[str(scen)]=Data.xs(scen,level=0).stack(dropna=False).to_dict()
+                        tempdic[str(scen)]=Data.xs(scen,level=0).stack(future_stack=True).to_dict()
             self.val[MatrixName]=tempdic
             self.scen[MatrixName]=Scenario
         else:
-            self.val[MatrixName]=Data.stack(dropna=False).to_dict()
+            self.val[MatrixName]=Data.stack(future_stack=True).to_dict()
 
         #Collect matrix column index
         if ColIndexName != None and ColIndexName == ColIndexName:
@@ -232,7 +232,7 @@ class Database():
             # if data.columns.dtype=='int64': #Avoid int as index 
             #     data.columns=data.columns.astype('str')
             #collect data
-            self.collect_index_data(data,iindex,pfile,opt['MultiIndexName'],i0=i0)                                       
+            self.collect_index_data(data,opt['Index'],pfile,opt['MultiIndexName'],i0=i0)                                       
             if opt['DataType']==1: #Classic column data
                 self.collect_column_data(data,opt['Scenario'],onlyscen=onlyscen)
             if opt['DataType']==2: #Matrix data
@@ -244,9 +244,10 @@ class Database():
         #if parameter is not collected, and 
         #hard coded growing parameters
         GrowingParameters=['wUserDem',
-                           'eEngyDem','eFuelCost','eCO2Val','eCAPEX','eOppCost','eOppCap',
+                           'eEngyDem','eFuelCost','eCO2Val','eCAPEX','eOppCost','eOppCap','eTechEff',
                            'aCropDem','aCropVal','aTransCost','aFarmVal',
                            'aCulYield','aLandCap','aCulMax',
+                           'jProdCap',
                            'iCAPEX']
         if directparam!=0 and ParamName in directparam.keys(): #Assign parameter directly and not from parameters object 
             return directparam[ParamName]

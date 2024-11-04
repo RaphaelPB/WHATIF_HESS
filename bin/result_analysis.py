@@ -45,7 +45,9 @@ class ResultAnalysis():
         All_DV['xCULAREA'] = {index:md.xCULAREA[index]() for index in md.xCULAREA}
         All_DV['xCULYIELD'] = {index:md.xCulProd[index]()/md.xCULAREA[index]() for index in md.xCULAREA if md.xCULAREA[index]()>0.001} #0.001 empirical threshold to avoid /0 and numerical residues
         All_DV['xTempFactor'] = {index:md.xTempFactor[index]() for index in md.xTempFactor}
-        #All_DV['xJobs'] = {index:md.xJobs[index]() for index in md.xJobs}
+        All_DV['xJobs'] = {index:md.xJobs[index]() for index in md.xJobs}
+        All_DV['xGHG'] = {index:md.xGHG[index]() for index in md.xGHG}
+
         if md.Options['Crop demand elasticity'] in [0,'linearized']:
             All_DV['AcSUPPLY']={(y,cm,cr):sum(md.AcSUPPLY[y,cm,cr,kcds].value for kcds in md.ncdstep) for y,cm,cr,ccds in md.AcSUPPLY}
         #Constraints
@@ -92,6 +94,21 @@ class ResultAnalysis():
         IDX['Power_newprod_GWh']={
                 (md.t_year[t],t,md.pmarket_country[pm],pt):sum(md.EeGENPROD[t,pld,pt,pm].value*md.se.value for pld in md.npload)
                                 for t in md.ntime for pm in md.npmarket for pt in md.nptech}
+        
+        IDX['Power_totprod_GWh']={
+                (md.t_year[t],t,md.pmarket_country[pm],pt):
+                    sum(md.EeGENPROD[t,pld,pt,pm].value*md.se.value for pld in md.npload)
+                    +sum(md.EeOPPROD[t,pld,opp].value*md.se.value for pld in md.npload for opp in md.nopp 
+                         if md.op_ptech[opp]==pt and md.op_pmarket[opp]==pm)
+                    +sum(md.EeHPPROD[t,pld,hp].value*md.se.value for pld in md.npload for hp in md.nhpp 
+                         if 'Hydro'==pt and md.hp_pmarket[hp]==pm)
+                                for t in md.ntime for pm in md.npmarket for pt in md.nptech}
+
+        IDX['Power_GenCapCAPEX_Md']= {
+                (y, md.pmarket_country[pm], pt):
+                    md.se.value*md.EeGENCAP[y,pt,pm].value*md.eCAPEX[y,pt,pm]
+                                      for y in md.nyear for pm in md.npmarket for pt in md.nptech}
+
         IDX['Power_prodcost_Md']={
                 (y,md.pmarket_country[pm]):+md.xOppProdCost[y,pm]() 
                                          +md.xOppFuelCost[y,pm]() + md.xOppCO2Cost[y,pm]() 
@@ -99,6 +116,7 @@ class ResultAnalysis():
                                          +md.xGenCO2Cost[y,pm]() + md.xGenCapCost[y,pm]()
                                          +sum(md.xHpProdCost[y,hp]() for hp in md.nhpp if md.hp_pmarket[hp]==pm)
                                 for y in md.nyear for pm in md.npmarket}
+
         IDX['Power_impval_Md']={
                 (y,md.pmarket_country[pm]):+sum(-md.EeTRANS[t,pld,tl].value
                                                  *md.dual[md.engy_balance[t,pld,pm]] 
@@ -106,6 +124,7 @@ class ResultAnalysis():
                                                  for t in md.ntime for pld in md.npload for tl in md.ntransline
                                                  if md.eTransOut[tl]==pm and md.t_year[t]==y)
                                 for y in md.nyear for pm in md.npmarket}
+
         IDX['Power_expval_Md']={
                 (y,md.pmarket_country[pm]):+sum(-md.EeTRANS[t,pld,tl].value
                                                  *md.dual[md.engy_balance[t,pld,pm]]
@@ -177,20 +196,37 @@ class ResultAnalysis():
                                 for y in md.nyear for cm in md.ncmarket for cul in md.nculture for at in agtype.keys()}
         #Water indicator
         catchcountry={co:[c for c in md.ncatch if md.catch_country[c]==co] for co in md.ncountry}
-        IDX['Runoff_Mm3']={(md.t_year[t],t,co):sum(md.wRunOff[t,c].value for c in catchcountry[co]) 
-                           for t in md.ntime for co in md.ncountry}
-        IDX['ET_mm']={(md.t_year[t],t,co):sum(md.wET0[t,c].value for c in catchcountry[co])/leni(catchcountry[co]) 
-                      for t in md.ntime for co in md.ncountry}
-        IDX['P_mm']={(md.t_year[t],t,co):sum(md.wRainFall[t,c].value for c in catchcountry[co])/leni(catchcountry[co]) 
-                     for t in md.ntime for co in md.ncountry}
-        # IDX['UserDem_p']={(md.t_year[t],t,md.catch_country[c],c):sum(md.WwSUPPLY[t,ku].value for ku in md.nuser if md.user_catch[ku]==c)
-        #                                                          /sum(md.wUserDem[md.t_year[t],md.t_month[t],ku] for ku in md.nuser if md.user_catch[ku]==c)
-        #                   for t in md.ntime for c in md.ncatch}
+        IDX['Runoff_Mm3']={(md.t_year[t],t,co):sum(md.wRunOff[t,c].value for c in catchcountry[co]) for t in md.ntime for co in md.ncountry}
+        IDX['ET_mm']={(md.t_year[t],t,co):sum(md.wET0[t,c].value for c in catchcountry[co])/leni(catchcountry[co]) for t in md.ntime for co in md.ncountry}
+        IDX['P_mm']={(md.t_year[t],t,co):sum(md.wRainFall[t,c].value for c in catchcountry[co])/leni(catchcountry[co]) for t in md.ntime for co in md.ncountry}
+        
+        #water consumption
+        IDX['Water_cons_Mm3']={
+            (md.t_year[t],t,md.catch_country[c],c,'irrigation'):
+                sum(md.AwSUPPLY[t,fz,cul].value*(1+md.aIrrgLoss[fz]/(1-md.aIrrgLoss[fz])-md.aCulRturn[md.fzone_type[fz],cul]) 
+                    for fz in md.nifzone for cul in md.nculture if md.fzone_catch[fz]==c)
+                                for t in md.ntime for c in md.ncatch}
+        IDX['Water_cons_Mm3'].update({
+            (md.t_year[t],t,md.catch_country[c],c,'water supply'):
+                sum(md.WwSUPPLY[t,ku].value for ku in md.nuser if md.user_catch[ku]==c)
+                                      for t in md.ntime for c in md.ncatch})
+        IDX['Water_cons_Mm3'].update({
+            (md.t_year[t],t,md.catch_country[c],c,'livestock'):
+                sum(md.JjPROD[t,j].value*(md.jWatCons[j]-md.jWatProd[j]) 
+                     for j in md.njactivity if md.j_catch[j]==c)
+                                      for t in md.ntime for c in md.ncatch})
+        #CCDR Zimbabwe specific
         IDX['UserDem']={(md.t_year[t],t,md.catch_country[c],c): sum(md.wUserDem[md.t_year[t],md.t_month[t],ku] for ku in md.nuser if md.user_catch[ku]==c)
                           for t in md.ntime for c in md.ncatch}
         IDX['UserSupply']={(md.t_year[t],t,md.catch_country[c],c): sum(md.WwSUPPLY[t,ku].value for ku in md.nuser if md.user_catch[ku]==c)
                           for t in md.ntime for c in md.ncatch}
-        
+        #water availability
+        IDX['Water_available_Mm3']={
+            (md.t_year[t],t,md.catch_country[c],c):
+             (sum(md.WwOUTFLOW[max(t-md.wLagTime[kc],md.Options['tini']),kc].value
+                for kc in md.ncatch if md.catch_ds[kc] == c)
+             +md.wRunOff[t,c].value)
+                                    for t in md.ntime for c in md.ncatch}
         #Welfare
         IDX['Power_welfare_Md']={
                 (y,md.pmarket_country[pm]):-md.xOppProdCost[y,pm]() 
@@ -343,7 +379,7 @@ class ResultAnalysis():
                                 for co in md.ncountry}                             
             #Capacity, Operation and fuel costs of generic power technologies 
         oo['CO2Emission_co'] = {co:oo['CO2Emission_co'][co]
-                                   +sum(md.se.value*md.EeGENPROD[t,pld,pt,pm].value/md.eTechEff[pt,pm]*md.eFuelCO2[fu]     
+                                   +sum(md.se.value*md.EeGENPROD[t,pld,pt,pm].value/md.eTechEff[md.t_year[t],pt,pm]*md.eFuelCO2[fu]     
                                         for t in md.ntime for pld in md.npload for pt in md.nptech for pm in md.npmarket for fu in md.nfuel 
                                         if md.ptech_fuel[pt,pm]==fu and md.pmarket_country[pm]==co)/leni(md.nyear) 
                                 for co in md.ncountry}     
@@ -1204,7 +1240,7 @@ class ResultAnalysis():
         oo['jActivity Table']={
             'Activity prod [u/y]':  {j:sum(md.JjPROD[t,j].value 
                                            for t in md.ntime)/leni(md.nyear) for j in md.njactivity},
-            'Activity capacity [u/y]':{j:sum(md.jProdCap[j] 
+            'Activity capacity [u/y]':{j:sum(md.jProdCap[md.t_year[t],j] 
                                              for t in md.ntime)/leni(md.nyear) for j in md.njactivity},
             'Economic balance [M$/y]':{j:sum(-md.JjPROD[t,j].value*md.jProdCost[j] 
                                              for t in md.ntime)/leni(md.nyear) for j in md.njactivity},
@@ -1336,6 +1372,8 @@ class ResultAnalysis():
         #create output folder
         if not os.path.exists(expfolder):
             os.makedirs(expfolder)
+        else:
+            return None
         #map indexes   
         simple_map('ncatch','ncountry','catch_country') #catch_country       
         simple_map('nres','ncatch','res_catch') #res_catch
@@ -1576,7 +1614,7 @@ class ResultAnalysis():
         
         #Save excel files
         print('Export to excel ...' +str(round(time.time()-tt))+ ' seconds')
-        writer.save()
+        writer.close()
 
 #%% Export scenarios main results in summary excel
     def export_scenario_analysis(self,scenarios,ref_scen,parallelresults,expfolder):
@@ -1646,6 +1684,6 @@ class ResultAnalysis():
         
         #Options
         self.exportsheet(writer,'Options',[oo['Options']],['OPTIONS'],index=[0])
-        writer.save()
+        writer.close()
         print('Export scenario analysis ...' +str(round(time.time()-tt))+ ' seconds')
         

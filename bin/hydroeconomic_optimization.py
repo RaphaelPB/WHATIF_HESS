@@ -72,10 +72,8 @@ class HydroeconomicOptimization():
         AVERAGEHYDRO=0 if 'AVERAGEHYDRO' not in md.Options.keys() else md.Options['AVERAGEHYDRO']
         
         #Cooling constraints
-        if 'Cooling' not in md.Options.keys():
-            COOLING=0
-        else:
-            COOLING=md.Options['Cooling']
+        COOLING=0 if 'Cooling' not in md.Options.keys() else md.Options['Cooling']
+            
         #%%###############
         #**Water Module**#
         ##################
@@ -197,10 +195,12 @@ class HydroeconomicOptimization():
         md.aCulYield        = Param(md.nyear, md.nftype, md.nculture, initialize=read('aCulYield',option=opt,time=md.nyear), within=Reals)  #Maximum yield of culture [ftype x culture] (t/ha) 
         md.aCulCost         = Param(md.nftype, md.nculture, initialize=read('aCulCost',option=opt), within=Reals)      #Cultivation cost [ftype x culture] ($/ha)
         md.aIrrigation      = Param(md.nftype, initialize=read('aIrrigation',option=opt), within=Reals)                #Irrigation (1) or rainfed culture(0) [ftype] (binary) 
+        md.aCulJob          = Param(md.nculture, initialize=read('aCulJob',option=opt), within=Reals)                  #Direct jobs per cultivatd area (jobs/ha)
+        md.aCulGHG          = Param(md.nculture, initialize=read('aCulGHG',option=opt), within=Reals)                  #Direct GHG per cultivatd area (CO2eq/ha)
     #Farming Zones
         md.aLandCap         = Param(md.nyear, md.nfzone, initialize=read('aLandCap',option=opt,time=md.nyear), within=Reals) #Land capacity for agriculture [year x fzone] (1000ha)
-        md.aIrrgCost        = Param(md.nfzone, initialize=read('aIrrgCost',option=opt), within=Any)            #Irrigation cost [fzone] ($/m3)
-        md.aIrrgLoss        = Param(md.nfzone, initialize=read('aIrrgLoss',option=opt), within=Any)            #Water loss rate from allocated [fzone] (%) 
+        md.aIrrgCost        = Param(md.nfzone, initialize=read('aIrrgCost',option=opt), within=Reals)            #Irrigation cost [fzone] ($/m3)
+        md.aIrrgLoss        = Param(md.nfzone, initialize=read('aIrrgLoss',option=opt), within=Reals)            #Water loss rate from allocated [fzone] (%) 
     #Cultures
         if md.Options['KckY farmtype']==1: #Kc and kY are defined per farm type
             md.akY          = Param(md.nftype, md.nculture, md.nyphase, initialize=read('akY',option=opt), within=Reals)    #crop yield response phase-specific factor [ftype x culture x yphase](%) 
@@ -286,12 +286,14 @@ class HydroeconomicOptimization():
         md.eHppCap          = Param(md.nhpp, initialize=read('eHppCap',option=opt), within=Reals)        #Capacity of HP turbines [hpp] (MW)
         md.eHppEff          = Param(md.nhpp, initialize=read('eHppEff',option=opt), within=Reals)        #Efficiency of HP turbines [hpp] (%)
         md.eHppCost         = Param(md.nhpp, initialize=read('eHppCost',option=opt), within=Reals)       #Operational production cost of HP [hpp] ($/kWh)
+        md.eHppJob          = Param(md.nhpp, initialize=read('eHppJob',option=opt), within=Reals)        #Jobs per MW of hydropower (Jobs/MW)
     #Power plants and fuels
         opt= md.Options['Energy production'] and md.Options['Power plants']
         md.nopp             = Set(initialize=read('op_pmarket',option=opt).keys())            #Other Power Plants (OPP) [indice opp] (id)
         md.op_pmarket       = Param(md.nopp, initialize=read('op_pmarket',option=opt), within=Any)     #pmarket of OPP [opp] (id)
         md.eOppCost         = Param(md.nyear, md.nopp, initialize=read('eOppCost',option=opt,time=md.nyear), within=Reals) #Operational production cost of OPP [opp] ($/kWh)
         md.eOppCap          = Param(md.nyear, md.nopp, initialize=read('eOppCap',option=opt,time=md.nyear), within=Reals)  #Production capacity of OPP [year x opp] (MW)        
+        md.eOppJob          = Param(md.nopp, initialize=read('eOppJob',option=opt), within=Reals)        #Jobs per MW of Other power plants (Jobs/MW)
         if md.Options['Power technologies'] == 1 or md.Options['Load capacity'] == 1:
             md.op_ptech     = Param(md.nopp, initialize=read('op_ptech',option=opt), within=Any)       #Technology of OPP [opp] (id)
         if md.Options['Ramping'] == 1:
@@ -299,19 +301,19 @@ class HydroeconomicOptimization():
         if md.Options['Fuels'] ==1:
             md.eOppEff      = Param(md.nopp, initialize=read('eOppEff',option=opt), within=Reals)        #Efficiency of OPP [opp] (kWh_net/kWh_fuel)            
             md.op_fuel      = Param(md.nopp, initialize=read('op_fuel',option=opt), within=Any)        #Fuel of OPP [opp] (id)                 
-        if 'Cooling' in md.Options.keys() and md.Options['Cooling'] == 1:
+        if COOLING == 1:
             md.op_catch     = Param(md.nopp, initialize=read('op_catch',option=opt), within=Any)        #Catchment of OPP (id)
             md.eCoolCoef    = Param(md.nopp, initialize=read('eCoolCoef',option=opt), within=Reals)       #Cooling coefficient (share that is cooled by towers)
             md.eOppDT       = Param(md.nopp, initialize=read('eOppDT',option=opt), within=Reals)          #Maximum temperature delta in river (K)
 #%% **Non linear hydro-power module**
         if md.Options['Hydropower'] == 'nonlinear' and md.Options['Energy production'] == 1:
-            md.wResMOL      = Param(md.nres, initialize=read('wResMOL'), within=Reals)
-            md.wResFSL      = Param(md.nres, initialize=read('wResFSL'), within=Reals)
-            md.wMinTurb     = Param(md.nhpp, initialize=read('wMinTurb'), within=Reals)
-            md.wMaxTurb     = Param(md.nhpp, initialize=read('wMaxTurb'), within=Reals)
-            md.wMinHead     = Param(md.nres, initialize=read('wMinHead'), within=Reals)
-            md.wMaxHead     = Param(md.nres, initialize=read('wMaxHead'), within=Reals)
-            md.wFixHead     = Param(md.nres, initialize=read('wFixHead'), within=Any)
+            md.wResMOL      = Param(md.nres, initialize=read('wResMOL'), within=Reals)  #Minimum operating level (head is at its minimum) (Mm3)
+            md.wResFSL      = Param(md.nres, initialize=read('wResFSL'), within=Reals)  #Full supply level (head is at its max) (Mm3)
+            md.wMinTurb     = Param(md.nhpp, initialize=read('wMinTurb'), within=Reals) #Turbine flow capacity at MOL outflow (m3/s)
+            md.wMaxTurb     = Param(md.nhpp, initialize=read('wMaxTurb'), within=Reals) #Turbine flow capacity at FSL (m3/s)
+            md.wMinHead     = Param(md.nres, initialize=read('wMinHead'), within=Reals) #Head at MOL - impacts power prod (m)
+            md.wMaxHead     = Param(md.nres, initialize=read('wMaxHead'), within=Reals) #Head at FSL - impacts power prod (m)
+            md.wFixHead     = Param(md.nres, initialize=read('wFixHead'), within=Any) #If 1 reservoir level has no impact and head is assumed fixed (binary)
             #Head-Volume relation (linear assumption)
             def _RelHeadVol(Vol,MOL,FSL,hmin,hmax):                
                 return hmin/hmax + (1-hmin/hmax)*(Vol-MOL)/(FSL-MOL)
@@ -346,6 +348,7 @@ class HydroeconomicOptimization():
         md.eCO2Val          = Param(md.nyear, md.npmarket, initialize=read('eCO2Val',option=opt,time=md.nyear) 
                                                            if md.Options['Fuels'] == 1 else 
                                                            {(y,pm):0 for y in md.nyear for pm in md.npmarket}, within=Reals)  #CO2 price [1] ($/t)
+        md.eFuelJob         = Param(md.nfuel, initialize=read('eFuelJob',option=opt), within=Reals)        #Direct Jobs related to fuel (Jobs/Kwh-fuel)
     #Generic capacity investment
         opt= md.Options['Energy production'] and md.Options['Energy market'] and md.Options['Power technologies']             
         md.nptech           = Set(initialize=list(set([key[0] for key in read('eVarOPEX',option=opt).keys()])))  #Power technologies [indice ptech] (id)
@@ -355,9 +358,11 @@ class HydroeconomicOptimization():
         md.eLifeTime        = Param(md.nptech, md.npmarket, initialize=read('eLifeTime',option=opt), within=Reals)       #Life time of power technology [ptech x pmarket] (years)
         md.eConstTime       = Param(md.nptech, md.npmarket, initialize=read('eConstTime',option=opt), within=Reals)      #Construction time of power technology [ptech x pmarket] (years)
         md.eMaxCap          = Param(md.nptech, md.npmarket, initialize=read('eMaxCap',option=opt), within=Any)         #Maximum expandable capacity of power technology [ptech x pmarket] (kWh/day)
+        md.eConstJob        = Param(md.nptech, md.npmarket, initialize=read('eConstJob',option=opt), within=Reals)              #Direct Jobs related to new power capacity (Jobs/MW)
+        md.eOMJob           = Param(md.nptech, md.npmarket, initialize=read('eOMJob',option=opt), within=Reals)              #Direct Jobs related to OM of power capacity (Jobs/MW)
     #Fuels
         if md.Options['Fuels'] == 1: 
-            md.eTechEff     = Param(md.nptech, md.npmarket, initialize=read('eTechEff',option=opt), within=Reals)     #Efficiency of power technology [ptech x pmarket] (%)
+            md.eTechEff     = Param(md.nyear, md.nptech, md.npmarket, initialize=read('eTechEff',option=opt), within=Reals)     #Efficiency of power technology [ptech x pmarket] (%)
             md.ptech_fuel   = Param(md.nptech, md.npmarket, initialize=read('ptech_fuel',option=opt), within=Any)   #Fuel of Technology [ptech x pmarket] (id)
         if md.Options['Ramping'] == 1:
             md.eTechRamp    = Param(md.nptech, md.npmarket, initialize=read('eTechRamp',option=opt), within=Reals)    #Ramping rate of Technology [ptech x pmarket] (%/load segment)           
@@ -380,7 +385,8 @@ class HydroeconomicOptimization():
             #**Activities**#
         ########################## 
         opt= md.Options['Activities'] 
-        md.njactivity       = Set(initialize=read('jProdCap',option=opt).keys())
+        md.njactivity       = Set(initialize=read('j_type',option=opt).keys())
+        md.j_type           = Param(md.njactivity,initialize=read('j_type',option=opt), within=Any) #type of activity
         md.j_country        = Param(md.njactivity,initialize=read('j_country',option=opt), within=Any) #country of activity
         md.j_catch          = Param(md.njactivity,initialize=read('j_catch',option=opt), within=Any) #catchment of activity (if relevant)
         md.j_pmarket        = Param(md.njactivity,initialize=read('j_pmarket',option=opt), within=Any) #power market of activity (if relevant)
@@ -388,7 +394,7 @@ class HydroeconomicOptimization():
         md.j_cmarket        = Param(md.njactivity,initialize=read('j_cmarket',option=opt), within=Any) #crop market of activity (if relevant)
         md.j_cropin         = Param(md.njactivity,initialize=read('j_cropin',option=opt), within=Any) #crop as input to activity (if relevant)
         md.j_cropout        = Param(md.njactivity,initialize=read('j_cropout',option=opt), within=Any) #crop as output to activity (if relevant)
-        md.jProdCap         = Param(md.njactivity,initialize=read('jProdCap',option=opt), within=Reals) # Production capacity (units/month)
+        md.jProdCap         = Param(md.nyear,md.njactivity,initialize=read('jProdCap',option=opt), within=Reals) # Production capacity (units/month)
         md.jProdCost        = Param(md.njactivity,initialize=read('jProdCost',option=opt), within=Reals) # Production costs (M$/units/month)
         #md.jProdVal         = Param(md.njactivity,initialize=read('jProdVal',option=opt)) # Production value (M$/units/month)
         md.jLandCons        = Param(md.njactivity,initialize=read('jLandCons',option=opt), within=Reals) # Land consumption (1000 ha/units/month)
@@ -399,6 +405,8 @@ class HydroeconomicOptimization():
         md.jPowProd         = Param(md.njactivity,initialize=read('jPowProd',option=opt), within=Reals) # Power production (GWh/units/month)
         md.jCropCons        = Param(md.njactivity,initialize=read('jCropCons',option=opt), within=Reals) # Crop consumption (1000t/units/month)
         md.jCropProd        = Param(md.njactivity,initialize=read('jCropProd',option=opt), within=Reals) # Crop production (1000t/units/month)
+        md.jActJob          = Param(md.njactivity,initialize=read('jActJob',option=opt), within=Reals) # Activity jobs (1000jobs/units/month)
+        md.jActGHG          = Param(md.njactivity,initialize=read('jActGHG',option=opt), within=Reals) # Crop production (1000t/units/month)
         
 #%%DECLARE DECISION VARIABLES###       
     #Water Module#
@@ -607,11 +615,11 @@ class HydroeconomicOptimization():
                 rule=lambda md,y,pm:sum(md.se*md.EeGENPROD[t,pld,pt,pm]*md.eVarOPEX[pt,pm] 
                                         for t in _ntime(y) for pld in md.npload for pt in md.nptech))
         md.xGenFuelCost=Expression(md.nyear,md.npmarket, #Generic technologies fuel costs [M$]
-                rule=lambda md,y,pm:sum(md.se*md.EeGENPROD[t,pld,pt,pm]/md.eTechEff[pt,pm]*md.eFuelCost[y,pm,fu]  
+                rule=lambda md,y,pm:sum(md.se*md.EeGENPROD[t,pld,pt,pm]/md.eTechEff[y,pt,pm]*md.eFuelCost[y,pm,fu]  
                                         for t in _ntime(y) for pld in md.npload for pt in md.nptech for fu in md.nfuel
                                         if md.ptech_fuel[pt,pm]==fu))
         md.xGenCO2Cost=Expression(md.nyear,md.npmarket, #Generic technologies fuel costs [M$]
-                rule=lambda md,y,pm:sum(md.se*md.EeGENPROD[t,pld,pt,pm]/md.eTechEff[pt,pm]*md.eFuelCO2[fu]*md.eCO2Val[y,pm]  
+                rule=lambda md,y,pm:sum(md.se*md.EeGENPROD[t,pld,pt,pm]/md.eTechEff[y,pt,pm]*md.eFuelCO2[fu]*md.eCO2Val[y,pm]  
                                         for t in _ntime(y) for pld in md.npload for pt in md.nptech for fu in md.nfuel
                                         if md.ptech_fuel[pt,pm]==fu))
         
@@ -898,7 +906,7 @@ class HydroeconomicOptimization():
                                       for kj in md.njactivity if md.j_catch[kj]==nc)
             BaseFlow            = 0
             #Net incoming flow from upstream catchments (Mm3)
-            NetInflow           = (1-md.wFlowLoss[nc]) * sum(md.sw*md.WwOUTFLOW[nt,kc] 
+            NetInflow           = (1-md.wFlowLoss[nc]) * sum(md.sw*md.WwOUTFLOW[max(nt-md.wLagTime[kc],md.Options['tini']),kc] 
                                                              for kc in md.ncatch if md.catch_ds[kc] == nc) 
             #Catchment Inflow (Mm3)
             RunOff              = md.wRunOff[nt,nc] 
@@ -999,10 +1007,13 @@ class HydroeconomicOptimization():
             for c in md.ncatch:
                 NatOutflow[t][c]=md.wRunOff[t,c].value
                 upcatch=[c]
+                clagtime={c:0}
                 while len(upcatch)>0:
-                    UpInflow = sum(md.wRunOff[t,kc].value for kc in md.ncatch if md.catch_ds[kc] in upcatch)
+                    UpInflow = sum(md.wRunOff[max(t-clagtime[md.catch_ds[kc]],md.Options['tini']),kc].value 
+                                   for kc in md.ncatch if md.catch_ds[kc] in upcatch)
                     NatOutflow[t][c] += UpInflow
-                    upcatch=[kc for kc in md.ncatch if md.catch_ds[kc] in upcatch]        
+                    upcatch=[kc for kc in md.ncatch if md.catch_ds[kc] in upcatch]
+                    clagtime={kc:clagtime[md.catch_ds[kc]]+md.wLagTime[kc] for kc in upcatch} #collect cumulative lagtime
         #Find most severe years to allow softening of constrain in these years
         if md.Options['Hard eflows'] != 1:         
             years       = [y for y in md.nyear]
@@ -1304,6 +1315,7 @@ class HydroeconomicOptimization():
         def engy_oppcapacity(md,nt,npld,nop): #Powerplant production per load segment limited by capacity [time x pload x opp]
             ny=md.t_year[nt]
             nm=md.t_month[nt]
+            npm=md.op_pmarket[nop]
             CapacityFactor = md.MW_to_GWhperMonth * md.eLoadTime[npld] #No particular restriction if not specified
             if md.Options['Load capacity'] == 1:
                 CapacityFactor = CapacityFactor * md.eLoadCap[npld,md.op_ptech[nop],nm]                
@@ -1322,7 +1334,7 @@ class HydroeconomicOptimization():
             if md.eMaxCap[npt,npm] == 'unlimited': #hard coded key word for unlimited capacity investment
                 return Constraint.Skip
             else:
-                return sum(md.se*md.EeGENCAP[ky,npt,npm] for ky in md.nyear) <= md.eMaxCap[npt,npm]
+                return sum(md.se*md.EeGENCAP[ky,npt,npm] for ky in md.nyear) <= float(md.eMaxCap[npt,npm])
         
         def engy_genramping(md,nt,nplda,npldb,npt,npm): #Ramping constraints for Generic capacity
             if nplda == npldb:
@@ -1374,7 +1386,7 @@ class HydroeconomicOptimization():
         if md.Options['Ramping'] == 1:
             md.engy_oppramping  = Constraint(md.ntime, md.npload, md.npload, md.nopp, rule=engy_oppramping)  
             md.engy_genramping  = Constraint(md.ntime, md.npload, md.npload, md.nptech, md.npmarket, rule=engy_genramping)
-        if 'Cooling' in md.Options.keys() and md.Options['Cooling'] == 1:
+        if COOLING == 1:
             md.cooling_const  = Constraint(md.ntime, md.npload, md.nopp, rule=cooling_const)
             
         #%%----------------------------Power market module----------------------------
@@ -1409,8 +1421,74 @@ class HydroeconomicOptimization():
         #Constraint catalogue
         #activity is constrained by capacity
         def activity_capacity(md,nt,nj):
-            return md.JjPROD[nt,nj]<=md.jProdCap[nj] + _InvestedCapacity(md.jProdCap[nj],nj,'activity',nt)
+            invested=_InvestedCapacity(md.jProdCap[md.t_year[nt],nj],nj,'activity',nt)
+            return md.JjPROD[nt,nj]<=md.jProdCap[md.t_year[nt],nj] + invested
         md.activity_capacity    = Constraint(md.ntime, md.njactivity, rule=activity_capacity)
+        
+        #%%---------------------------Other----------------------------------
+        #jobs (1000 jobs)
+        ptech = [pt for pt in md.nptech]
+        if md.Options['Power technologies']==0:
+            ptech = list(set([md.op_ptech[op] for op in md.nopp]))
+        activities = list(set([md.j_type[j] for j in md.njactivity]))
+        sector=[cul for cul in md.nculture]+ptech+['hydropower']+activities
+        def job_sector(md,y,co,s):
+            if s in md.nculture:
+                val=sum(md.xCULAREA[y,fz,s]*md.aCulJob[s] 
+                        for fz in md.nfzone if md.fzone_country[fz]==co)
+            elif s =='hydropower':
+                val=sum(md.eHppCap[hp]*md.eHppJob[hp]/1000 #MW * jobs/MW converted to 1000 jobs
+                          for hp in md.nhpp if md.hp_country[hp]==co)
+            elif s in ptech:
+                opp_OM=sum(md.eOppCap[y,op]*md.eOppJob[op]/1000 #MW * jobs/MW converted to 1000 jobs
+                           for op in md.nopp 
+                           if md.pmarket_country[md.op_pmarket[op]]==co and md.op_ptech[op]==s)
+                opp_fuel=sum(md.se*md.EeOPPROD[t,pld,op]/md.eOppEff[op]*md.eFuelJob[fu]
+                             for t in _ntime(y) for pld in md.npload for op in md.nopp for fu in md.nfuel
+                             if md.pmarket_country[md.op_pmarket[op]]==co and md.op_fuel[op]==fu and md.op_ptech[op]==s)
+                val=opp_OM+opp_fuel
+                if md.Options['Power technologies']!=0:
+                    gen_fuel=sum(md.se*md.EeGENPROD[t,pld,s,pm]/md.eTechEff[y,s,pm]*md.eFuelJob[fu] 
+                                 for t in _ntime(y) for pld in md.npload for fu in md.nfuel for pm in md.npmarket
+                                 if md.ptech_fuel[s,pm]==fu and md.pmarket_country[pm]==co)
+                    gen_const=sum(md.se*md.EeGENCAP[y,s,pm]*md.eConstJob[s,pm] 
+                                  for pm in md.npmarket if md.pmarket_country[pm]==co)/1000 #jobs/MW converted to 1000 jobs
+                    gen_OM=sum(sum(md.se*md.EeGENCAP[ky,s,pm] for ky in md.nyear 
+                                   if ky <= y-md.eConstTime[s,pm] and ky > y-(md.eLifeTime[s,pm]+md.eConstTime[s,pm]))
+                               *md.eOMJob[s,pm]/1000
+                               for pm in md.npmarket if md.pmarket_country[pm]==co)
+                    val=opp_OM+opp_fuel+gen_fuel+gen_const+gen_OM
+            elif s in activities:
+                val=sum(md.JjPROD[t,nj]*md.jActJob[nj] 
+                        for t in md.ntime for nj in md.njactivity 
+                        if md.j_country[nj]==co and md.t_year[t]==y and md.j_type[nj]==s)
+            return val
+        md.xJobs = Expression(md.nyear,md.ncountry,sector,rule=job_sector)
+        
+        #GHG emissions
+        def ghg_sector(md,y,co,s):
+            val=0
+            if s in md.nculture:
+                val=sum(md.xCULAREA[y,fz,s]*md.aCulGHG[s] 
+                        for fz in md.nfzone if md.fzone_country[fz]==co)
+            elif s in ptech:
+                opp_ghg=sum(md.se*md.EeOPPROD[t,pld,op]/md.eOppEff[op]*md.eFuelCO2[fu]
+                             for t in _ntime(y) for pld in md.npload for op in md.nopp for fu in md.nfuel
+                             if md.pmarket_country[md.op_pmarket[op]]==co 
+                             and md.op_fuel[op]==fu and md.op_ptech[op]==s)*1000 #MtCO2eq to ktCO2eq
+                val=opp_ghg
+                if md.Options['Power technologies']!=0:
+                    gen_ghg=sum(md.se*md.EeGENPROD[t,pld,s,pm]/md.eTechEff[y,s,pm]*md.eFuelCO2[fu] 
+                                 for t in _ntime(y) for pld in md.npload for fu in md.nfuel for pm in md.npmarket
+                                 if md.ptech_fuel[s,pm]==fu and md.pmarket_country[pm]==co)*1000 #MtCO2eq to ktCO2eq
+                    val=opp_ghg+gen_ghg
+            elif s in activities:
+                val=sum(md.JjPROD[t,nj]*md.jActGHG[nj] 
+                        for t in md.ntime for nj in md.njactivity 
+                        if md.j_country[nj]==co and md.t_year[t]==y and md.j_type[nj]==s)
+            return val
+        md.xGHG = Expression(md.nyear,md.ncountry,sector,rule=ghg_sector)
+        
 #%%SAVE MODEL
         self.model=md
 
