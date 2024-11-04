@@ -33,9 +33,11 @@ if CSVDECIMAL == ',':
     CSVSEPARATOR = ';'
 
 #%%OPTIONS - MODIFY BY USER
-SHEET='main'
-FOLDERNAME='WHATIF_main'
+SHEET='scenarios'
+FOLDERNAME='2023_07_02_15h04_zim_BAU_ASP_RES_scenarios'
 DIFFMODE=0 # if=1 exports relative results to POWERBI, instead of absolute (=0)
+IFPRI_IDX=1
+IFPRI_REFSCEN='zim_observed'
 SCENFILE='Scenarios_to_compare.xlsx'
 result_path = os.path.join(dirname,'Results',FOLDERNAME)
 
@@ -102,7 +104,7 @@ def aggregate_scenarios_to_csv(scenarios,vardic,outpath,keytype='tuple',indexnam
         if refscen==0:
             #assemble different scenarios
             if keytype=='tuple':
-                frames=[pd.Series(vardic[scen][elem]) for scen in scenpresent] 
+                frames=[pd.Series(vardic[scen][elem],dtype='float64') for scen in scenpresent] 
             elif keytype=='nested':
                 frames=[dict_to_pd(vardic[scen][elem]) for scen in scenpresent]
         else:
@@ -183,6 +185,8 @@ VarIndex={
  'AcTRANS':['nyear', 'nctrans', 'ncrop'],
  'AlCULAREA':['nyear', 'nfzone', 'nflied', 'nfieldculture'],
  'xCULAREA':['nyear','nfzone','nculture'],
+ 'xCULYIELD':['nyear','nfzone','nculture'],
+ 'xTempFactor':['nyear','nfzone','nculture'],
  'AwSUPPLY':['ntime', 'nfzone', 'nculture'],
  'DUMYCROP':['nyear', 'nfzone', 'ncrop'],
  'DUMYEFLOW':['ntime', 'neflow'],
@@ -230,4 +234,115 @@ ScenarioB={scen:pickle.load(open(os.path.join(result_path,scen+'_Balances.txt'),
 REF = 0 if DIFFMODE == 0 else refscen
 aggregate_scenarios_to_csv(scenarios,ScenarioB,Bpath,keytype='nested',indexname=BalIndex,elist=0,refscen=REF,renamecol=0)
 
-        
+#%% IFPRI indicators        
+if IFPRI_IDX==1:
+    VarIndex={
+    'Runoff_Mm3':['nyear','ntime','ncountry'],
+    'P_mm':['nyear','ntime','ncountry'],
+    'ET_mm':['nyear','ntime','ncountry'],
+    'Crop_area_kha':['nyear','ncountry','ncrop','nftype'],
+    'Crop_price_dpt':['nyear','ncountry','ncrop'],
+    'Crop_prod_kt':['nyear','ncountry','ncrop','nftype'],
+    'Crop_val_Md':['nyear','ncountry','ncrop','nftype'],
+    'Cul_Dem_mm':['nyear','ncountry','nculture'],
+    'Cul_Rain_mm':['nyear','ncountry','nculture'],
+    'Cul_Cons_Mm3':['nyear','ntime','ncountry','ncrop'],
+    'Cul_Temp_Factor':['nyear','ncountry','nculture','nftype'],
+    'Hydropower_prod_GWh':['nyear','ntime','ncountry','nhpp'],
+    'Hydropower_val_Md':['nyear','ntime','ncountry','nhpp'],
+    'Power_newprod_GWh':['nyear','ntime','ncountry','nhpp'],
+    'Power_price_dpkWh':['nyear','ntime','ncountry'],
+    'Power_welfare_Md':['nyear','ncountry'],
+    'Crop_welfare_Md':['nyear','ncountry'],
+    'Crop_impval_Md':['nyear','ncountry','ncrop'],
+    'Crop_expval_Md':['nyear','ncountry','ncrop'],
+    'Power_expval_Md':['nyear','ncountry'],
+    'Power_impval_Md':['nyear','ncountry'],
+    'Power_prodcost_Md':['nyear','ncountry'],
+    'FZCrop_area_kha':['nyear','ncountry','ncrop','nftype','ncatch'],
+    'FZCrop_prod_kt':['nyear','ncountry','ncrop','nftype','ncatch'],
+    'FZCrop_val_Md':['nyear','ncountry','ncrop','nftype','ncatch'],
+    #'UserDem_p':['nyear','ntime','ncountry','ncatch'],
+    'UserDem':['nyear','ntime','ncountry','ncatch'],
+    'UserSupply':['nyear','ntime','ncountry','ncatch']
+    }
+    ScenarioIFPRI={scen:pickle.load(open(os.path.join(result_path,scen+'_ifpri_IDX.txt'),"rb")) for scen in scen_to_load}
+    DVpath=os.path.join(result_path,'IFPRI_IDX')
+    aggregate_scenarios_to_csv(scenarios,ScenarioIFPRI,DVpath,keytype='tuple',indexname=VarIndex,elist=0,refscen=REF,renamecol=1)
+    #%%TABLES
+    Data={}
+    for var in VarIndex.keys():
+        path=os.path.join(DVpath,var+'.csv')
+        pdata=pd.read_csv(path)
+        Data[var]=pdata
+    #read xTempFactor
+    #pdata=pd.read_csv(os.path.join(result_path,'DecisionVariables','xTempFactor.csv'))
+    #Data['xTempFactor']=pdata
+    country='Zimbabwe'
+    def selm(var,country=country):
+        return Data[var][Data[var]['ncountry']==country]
+    
+    ny=len(set(Data['Hydropower_prod_GWh']['nyear']))
+    writer = pd.ExcelWriter(os.path.join(DVpath,'IDX_'+country+'.xlsx'), engine='openpyxl')
+    
+    def table_ag(var,index=0,by='sum',select='ncountry',country='Zimbabwe',factor=1/ny,ref=IFPRI_REFSCEN):
+        #Add decade
+        Data[var]['decade']=Data[var]['nyear'].apply(lambda k:int(str(k-1)[0:3]+'0'))
+        #Select country
+        if select != 0:
+            a=Data[var][Data[var][select]==country]
+        else:
+            a=Data[var]
+        if index != 0:
+            if by=='sum':
+                b=a.groupby([index,'scenario']).sum(numeric_only=True)[var].unstack(level='scenario')*factor
+                d=a.groupby(['decade',index,'scenario']).sum(numeric_only=True)[var].unstack(level='scenario')*factor
+            else:
+                b=a.groupby([index,'scenario']).mean(numeric_only=True)[var].unstack(level='scenario')*factor
+                d=a.groupby(['decade',index,'scenario']).mean(numeric_only=True)[var].unstack(level='scenario')*factor
+            #b.join(b.divide(b['observed'],axis=0))
+            b.to_excel(writer, sheet_name=index+var)
+            br=b.divide(b[ref],axis=0).to_excel(writer, sheet_name='rel'+index+var)
+            dr=d.divide(d[ref],axis=0).to_excel(writer, sheet_name='decade_rel'+index+var)
+        if by=='sum':
+            c=a.groupby(['scenario','decade']).sum(numeric_only=True)[var]*factor
+            a=a.groupby(['scenario']).sum(numeric_only=True)[var]*factor       
+        else:
+            c=a.groupby(['scenario','decade']).mean(numeric_only=True)[var]*factor
+            a=a.groupby(['scenario']).mean(numeric_only=True)[var]*factor
+        #a.join(a.divide(a['observed'],axis=0))
+        a.to_excel(writer, sheet_name=var)
+        ar=a.divide(a[ref],axis=0).to_excel(writer, sheet_name='rel'+var)
+        cr=c.divide(c[ref],axis=0).to_excel(writer, sheet_name='decade_rel'+var)
+    #Climate
+    table_ag('Runoff_Mm3',by='sum')
+    table_ag('P_mm',by='mean',factor=12)
+    #Hydropower prod
+    table_ag('Hydropower_prod_GWh',index='nhpp',by='sum')
+    table_ag('Hydropower_val_Md',index='nhpp',by='sum')
+    table_ag('Power_price_dpkWh',by='mean',factor=1)
+    #Economics
+    table_ag('Power_welfare_Md',index=0,by='sum')
+    table_ag('Power_expval_Md',index=0,by='sum')
+    table_ag('Power_impval_Md',index=0,by='sum')
+    table_ag('Power_prodcost_Md',index=0,by='sum')
+    #Agriculture production
+    #economics
+    table_ag('Crop_welfare_Md',index=0,by='sum')
+    table_ag('Crop_impval_Md',index=0,by='sum')
+    table_ag('Crop_expval_Md',index=0,by='sum')
+    #yield
+    Data['Crop_yield_tpha']=Data['Crop_prod_kt'].copy(deep=True)
+    Data['Crop_yield_tpha']['Crop_yield_tpha']=Data['Crop_prod_kt']['Crop_prod_kt']/Data['Crop_area_kha']['Crop_area_kha']
+    #prod
+    table_ag('Crop_area_kha',index='ncrop',by='sum')
+    table_ag('Crop_prod_kt',index='ncrop',by='sum')
+    table_ag('Crop_val_Md',index='ncrop',by='sum')
+    table_ag('Crop_val_Md',index='nftype',by='sum')
+    table_ag('Crop_price_dpt',index='ncrop',by='mean',factor=1)
+    table_ag('Crop_yield_tpha',index='ncrop',by='mean',factor=1)
+    table_ag('Cul_Temp_Factor',index='nculture',by='mean',factor=1)
+    #value
+    writer.save()
+    writer.close()
+    #%% Ma

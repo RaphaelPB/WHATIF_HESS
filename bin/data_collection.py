@@ -47,7 +47,7 @@ class Database():
             self.scen={}
             self.csv={}
             self.update=0            
-        
+                    
     def harvest_sheet(self,Path,SheetName,Header=5,Index=1,DataType=0,
                       Scenario=None,MultiIndexName=None,MatrixName=None,
                       ColIndexName=None,OnlyCols=None):
@@ -57,15 +57,28 @@ class Database():
         if Scenario != None and Scenario == Scenario:
             Index=Index+1 #add scenario as index
             i0=1#avoids collect scenario index  
-        Data = pd.read_excel(Path,sheet_name=SheetName, skiprows=Header, 
-                             index_col=list(range(Index)), usecols=OnlyCols, engine='openpyxl')
+        if '#' in SheetName: #collect several sheets
+            Data = pd.concat([pd.read_excel(Path,sheet_name=sn, skiprows=Header, 
+                                            index_col=list(range(Index)), usecols=OnlyCols, 
+                                            engine='openpyxl') 
+                              for sn in SheetName.split('#')])
+        else:
+            Data = pd.read_excel(Path,sheet_name=SheetName, skiprows=Header, 
+                                 index_col=list(range(Index)), usecols=OnlyCols, 
+                                 engine='openpyxl')
+        # #set integers to string
+        # if Data.index.dtype=='int64': #Avoid int as index 
+        #     Data.index=Data.index.astype('str')
+        # if Data.columns.dtype=='int64': #Avoid int as index 
+        #     Data.columns=Data.columns.astype('str')
+        
         #frame data depending on type (info,columns,or matrix)
         if DataType==0: #Info data
             self.info={}
             for k in Data.axes[1]:
                 self.info[k]=Data.to_dict()[k]
             for k in range(Index):
-                self.info[Data.index.names[k]]=Data.index.values             
+                self.info[Data.index.names[k]]=Data.index.values        
         else: #Collect indexes
             self.collect_index_data(Data,Index,SheetName,MultiIndexName,i0=i0)                                        
         if DataType==1: #Classic column data
@@ -82,7 +95,7 @@ class Database():
         else:
             for k in range(i0,Index):                
                 self._check_coherence(Data.index.names[k],Data.index.levels[k].values,SheetName)
-                self.val[Data.index.names[k]]=Data.index.levels[k].values
+                self.val[Data.index.names[k]]=Data.index.levels[k]
                 self.memo[Data.index.names[k]]=SheetName #remembers sheetname for check_coherence
             if MultiIndexName != None and MultiIndexName == MultiIndexName:
                 self.val[MultiIndexName]=Data.index.values
@@ -162,14 +175,6 @@ class Database():
                                                          for key in self.info.keys() if key!='nsheet'}
                     if 'OnlyScen' not in self.info.keys():
                         self.csv[self.info['SheetName'][k]]['OnlyScen']=None
-                            # 'Index':self.info['Index'][k],
-                            # 'Update':self.info['Update'][k],
-                            # 'DataType':self.info['DataType'][k],
-                            # 'Scenario':self.info['Scenario'][k],
-                            # 'OnlyScen':self.info['OnlyScen'][k] if 'OnlyScen' in self.info.keys() else None,
-                            # 'MatrixName':self.info['MatrixName'][k],
-                            # 'ColIndexName':self.info['ColIndexName'][k],
-                            # 'MultiIndexName':self.info['MultiIndexName'][k]}
                     info='LOAD CSV: Data will be loaded from '+self.info['SheetName'][k]
                     print(info)
                 else:
@@ -214,9 +219,20 @@ class Database():
                     onlyscen=self.val[opt['Scenario']][nscenario] #read only that scenario
                 iindex+=1 #add scenario index
                 i0=1
-            data = pd.read_csv(os.path.join(datafolder,pfile),sep=CSVSEPARATOR,decimal=CSVDECIMAL,
-                               index_col=list(range(iindex)))
-            self.collect_index_data(data,opt['Index'],pfile,opt['MultiIndexName'],i0=i0)                                       
+            if '#' in pfile: #append several csv files
+                data=pd.concat([pd.read_csv(os.path.join(datafolder,p),sep=CSVSEPARATOR,
+                                            decimal=CSVDECIMAL,index_col=list(range(iindex)))
+                               for p in pfile.split('#')])
+            else:
+                data = pd.read_csv(os.path.join(datafolder,pfile),sep=CSVSEPARATOR,decimal=CSVDECIMAL,
+                                   index_col=list(range(iindex)))
+            # #set integers to string
+            # if data.index.dtype=='int64': #Avoid int as index 
+            #     data.index=data.index.astype('str')
+            # if data.columns.dtype=='int64': #Avoid int as index 
+            #     data.columns=data.columns.astype('str')
+            #collect data
+            self.collect_index_data(data,iindex,pfile,opt['MultiIndexName'],i0=i0)                                       
             if opt['DataType']==1: #Classic column data
                 self.collect_column_data(data,opt['Scenario'],onlyscen=onlyscen)
             if opt['DataType']==2: #Matrix data
@@ -228,7 +244,7 @@ class Database():
         #if parameter is not collected, and 
         #hard coded growing parameters
         GrowingParameters=['wUserDem',
-                           'eEngyDem','eFuelCost','eCO2Val','eCAPEX', 'eOppCost', 'eOppCap',
+                           'eEngyDem','eFuelCost','eCO2Val','eCAPEX','eOppCost','eOppCap',
                            'aCropDem','aCropVal','aTransCost','aFarmVal',
                            'aCulYield','aLandCap','aCulMax',
                            'iCAPEX']
@@ -253,11 +269,12 @@ class Database():
     def grow_param(self,ParamName,scenario=''):
         #linear growth functiom
         def LinearGrowAtoB(ValuesA,ValuesB,yearA,yearB,yyears):
+            #float is in case off parameters result as string - not sure it is necessary
             if type(list(ValuesA.keys())[0]) is tuple: #keys need to be formulated differently if they are uni or multidimensional
-                return {(y,)+keys:ValuesA[keys] + (ValuesB[keys]-ValuesA[keys])/(yearB-yearA)*(y-yearA) 
+                return {(y,)+keys:float(ValuesA[keys]) + (float(ValuesB[keys])-float(ValuesA[keys]))/(yearB-yearA)*(y-yearA) 
                         for y in yyears for keys in ValuesA.keys()}
             else:
-                return {(y,keys): ValuesA[keys] + (ValuesB[keys]-ValuesA[keys])/(yearB-yearA)*(y-yearA) 
+                return {(y,keys): float(ValuesA[keys]) + (float(ValuesB[keys])-float(ValuesA[keys]))/(yearB-yearA)*(y-yearA) 
                         for y in yyears for keys in ValuesA.keys()}
         #Generate parameters
         optionON = self.val['Options']['Demand growth',self.val['sOptions'][scenario]]
@@ -292,15 +309,15 @@ class Database():
         tfin=self.val['Options']['tfin',stime]
         t0,m0,y0=self.val['Options']['TimeMonthYear',stime].split('#')
         mo=self.val['monthorder']
-        moi0=min(k for k in mo.keys()) #first index of ordered months (avoid i0 =1 or 0 problems)
+        moi0=min(int(k) for k in mo.keys()) #first index of ordered months (avoid i0 =1 or 0 problems)
         monthorder=[mo[k+moi0] for k in range(len(mo))] #months as ordered list
         nm0=[k for k in range(len(monthorder)) if monthorder[k]==m0][0] #initial month index
         ttime = [t for t in range(tini,tfin+1)] #considered time steps
         if 'wRunOff' not in self.scen.keys(): #no scenarios on runoff
-            self.val['ntime']=[k[0] for k in self.val['wRunOff'].keys()]
+            self.val['ntime']=[int(k[0]) for k in self.val['wRunOff'].keys()]
         else: #scenarios on runoff
             scen=self.val[self.scen['wRunOff']][scenario] #select scenario
-            self.val['ntime']=[k[0] for k in self.val['wRunOff'][scen].keys()]
+            self.val['ntime']=[int(k[0]) for k in self.val['wRunOff'][scen].keys()]
         
         self.val['t_year'] = {t:int(y0)+(t-int(t0))//len(monthorder) for t in self.val['ntime']} #year of time steps
         self.val['t_month'] = {t:monthorder[(t-int(t0)+nm0)%len(monthorder)] for t in self.val['ntime']} #month of time steps

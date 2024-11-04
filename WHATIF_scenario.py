@@ -35,29 +35,30 @@ import multiprocess as mp
 
 #%%OPTIONS - MODIFY BY USER
 #export options
-RESULTFOLDER = 'Basecase'+'_'+time.strftime("%d_%m_%Y_%Hh%M") #automatically generates names based on time and date (avoids erasing previous results)
+RESULTFOLDER = time.strftime("%Y_%m_%d_%Hh%M")+'_'+'zim_scenarios' #automatically generates names based on time and date (avoids erasing previous results)
 UPDATE = 0 #0 updates all parameters, 1 updates only selected parameters
-EXPORT = 'xlsx' #'all' powerBI files + following, 'xlsx': individual excel files + following, 'txt': selected results + excel of all selected results
+EXPORT = 'all' #'all' powerBI files + following, 'xlsx': individual excel files + following, 'txt': selected results + excel of all selected results
 #parallel options
-PARALLEL_scenario = 0 #Run scenarios in parallel 
-npll = 3 #Maximum number of paralllel scenario solves
+PARALLEL_scenario = 1 #Run scenarios in parallel 
+npll = 7 #Maximum number of paralllel scenario solves
 #solver options
 NEOS        = 0# use 1 to use neos server (which avoids you to install the solvers)
-SOLVER = 'cplex' #'cbc' #'cplex'
-SOLVERPATH = 0 #0 is default, precise path only if required by solver
+SOLVER = 'glpk' #'cbc' #'cplex'
+SOLVERPATH = '~/miniconda3/envs/dtuenv/bin/glpsol' #0
+#'/home/software/ipopt/3.12/bin/ipopt'#0 '~/CoinIpopt/bin/ipopt'# #0 is default, precise path only if required by solver
 
 #%%
 #Define paths
 ResultFolderPath= os.path.join(dirname, 'Results', RESULTFOLDER)
 DataFolderPath  = os.path.join(dirname, 'Data')
 
-#Collect parameters
-Main            = DataFolderPath + os.sep + 'MainFile_ex.xlsx'
-Water           = DataFolderPath + os.sep + 'WaterModule_ex.xlsx'
-Agriculture     = DataFolderPath + os.sep + 'AgricultureModule_ex.xlsx'
-CropMarket      = DataFolderPath + os.sep + 'CropMarketModule_ex.xlsx'
-Energy          = DataFolderPath + os.sep + 'EnergyModule_ex.xlsx'
-Investment      = DataFolderPath + os.sep + 'InvestmentModule_ex.xlsx'
+#Define path to data
+Main            = DataFolderPath + os.sep + 'MainFile.xlsx'
+Water           = DataFolderPath + os.sep + 'WaterModule.xlsx'
+Agriculture     = DataFolderPath + os.sep + 'AgricultureModule.xlsx'
+CropMarket      = DataFolderPath + os.sep + 'CropMarketModule.xlsx'
+Energy          = DataFolderPath + os.sep + 'EnergyModule.xlsx'
+Investment      = DataFolderPath + os.sep + 'InvestmentModule.xlsx'
 Param           = DataFolderPath + os.sep + 'Parameters.txt' #parameters (python dictionnaries) saved as txt
 
 print('Harvesting parameters...')
@@ -87,13 +88,18 @@ def ScenarioAnalysis(ss,parameters,solver):
         solverstatus = solver.solve(HOM.model,opt=SOLVER,suffixes='dual')
     else:
         solverstatus = solver.solve(HOM.model)
-    if HOM.model.Options['Investment module'] in [1,'continuous']:
+    invopt=HOM.model.Options['Investment module']
+    if invopt ==1 or (invopt=='continuous' and len([k for k in HOM.model.ninvestb])>0):
     #Fix selected investment to switch to fully linear model and get dual values
         for ip in HOM.model.ninvphase:
             for inv in HOM.model.ninvest:   
                 HOM.model.IbINVEST[ip,inv].fixed = True
                 if HOM.model.Options['Investment module'] in ['continuous']:
-                    if inv in HOM.model.ninvestb:
+                    if inv in HOM.model.ninvestb: #force binary value to be exactly 0 or 1 (avoid numerical residues)
+                        if HOM.model.IbINVESTb[ip,inv].value>0.5:
+                            HOM.model.IbINVESTb[ip,inv].value=1
+                        else:
+                            HOM.model.IbINVESTb[ip,inv].value=0
                         HOM.model.IbINVESTb[ip,inv].fixed = True
         print('...re-solving scenario ' + ss)
         if NEOS == 1:
@@ -112,7 +118,7 @@ def ScenarioAnalysis(ss,parameters,solver):
         result_analysis.export_all_DV(HOM.model,ResultFolderPath,scenario=ss) #export all decision variables
         result_analysis.export_mass_balances(results,ResultFolderPath,scenario=ss) #export mass balances (for powerBI)
         result_analysis.export_index_mapping(HOM.model,os.path.join(ResultFolderPath,'Mapping')) #export index mapping/connections (for powerBI)
-    
+        result_analysis.export_ifpri_indicators(HOM.model,ResultFolderPath,scenario=ss) #ifpri indicators
     #Save selected results for scenario analysis
     output=result_analysis.selectedresults(HOM.model,parameters,scenario=ss)
     outputpath=ResultFolderPath + os.sep + ss + '.txt' 
@@ -131,9 +137,9 @@ if NEOS == 1: #use neos server
     solver = SolverManagerFactory('neos')
 else:  
     solver = SolverFactory(SOLVER,executable=SOLVERPATH) if SOLVERPATH != 0 else SolverFactory(SOLVER)
-    #if solver.name == 'ipopt':
-        #solver.options['linear_solver']='ma97'
-        #solver.options['mu_strategy']='adaptive'
+    if solver.name == 'ipopt':
+        solver.options['linear_solver']='ma97'
+        solver.options['mu_strategy']='adaptive'
         #solver.options['bound_relax_factor']=10**-12
     if solver.name=='cplex' and PARALLEL_scenario==1:
         solver.options['threads'] = 1 #limit the number of parallel computing

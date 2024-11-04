@@ -1,5 +1,5 @@
 ﻿# WHAT-IF: Supporting water infrastructure investment planning within the water-energy-food nexus 
-**Master branch** Comes with example case data - perfect to understand the model and start your own WHAT-IF study case
+**Zambia CCDR branch** Zambezi case as in the (under review) article - go to Master branch to start your own case
 
 ## The decision support tool
 

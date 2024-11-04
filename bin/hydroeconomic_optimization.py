@@ -59,6 +59,7 @@ class HydroeconomicOptimization():
         md.se = Param(initialize=1000,mutable=True, within=Reals) # Scaling factor for all energy decision variables
         
     # OPTIONS UNDER DEVELOPMENT
+        #YIELDTEMPFACTOR=0 if 'YieldTempFactor' not in md.Options.keys() else md.Options['YieldTempFactor']
         ANALYTICAL=1 if 'ANALYTICAL' not in md.Options.keys() else md.Options['ANALYTICAL']
         #if 1 uses continuous solution for wetland evaporation, any other value uses discrete evaporation
         OUTFLOWPOWER=1 if 'OUTFLOWPOWER' not in md.Options.keys() else md.Options['OUTFLOWPOWER']
@@ -92,6 +93,7 @@ class HydroeconomicOptimization():
         md.catch_ds         = Param(md.ncatch, initialize=read('catch_ds'), within=Any)        #Downstream catchment of catchment [catchment] (id)
         md.catch_country    = Param(md.ncatch, initialize=read('catch_country'), within=Any)   #Country of catchment [catchment] (id) #REM: DOES NOT ALWAYS MAKE SENSE
         md.res_catch        = Param(md.nres,  initialize=read('res_catch'), within=Any)        #Reservoir's catchment [reservoir] (id)
+        md.res_upstream     = Param(md.nres,  initialize=read('res_upstream'), within=Any)     #Reservoir is able to serve upstream demand (within catchment) [reservoir] (1=yes)
         md.user_catch       = Param(md.nuser, initialize=read('user_catch'), within=Any)       #User's catchment [user] (id)
         md.user_dscatch     = Param(md.nuser, initialize=read('user_dscatch'), within=Any)     #User's downstream catchment [user] (id)
         md.user_country     = Param(md.nuser, initialize=read('user_country'), within=Any)     #User's country [user] (id)
@@ -123,6 +125,7 @@ class HydroeconomicOptimization():
         md.wRainFall        = Param(md.ntime, md.ncatch, mutable=True, initialize=hydro_read('wRainFall'), within=Reals)  #Precipitation [time x catchment] (mm)
         md.wET0             = Param(md.ntime, md.ncatch, mutable=True, initialize=hydro_read('wET0'), within=Reals)       #ET0 [time x catchment] (mm)
         md.wFlowLoss        = Param(md.ncatch, initialize=read('wFlowLoss'), within=Reals)                                #Flow loss [catchment] (-)
+        md.wLagTime         = Param(md.ncatch, initialize=read('wLagTime'), within=Reals)                                 #Lag Time [catchment] (-)
     #Groundwater
         opt= md.Options['Groundwater']
         md.wGwRech          = Param(md.ntime, md.naquifer, initialize=read('wGwRech',option=opt,time=ttime), within=Reals)    #Groundwater recharge [time x catchment] (Mm3/month)
@@ -196,8 +199,8 @@ class HydroeconomicOptimization():
         md.aIrrigation      = Param(md.nftype, initialize=read('aIrrigation',option=opt), within=Reals)                #Irrigation (1) or rainfed culture(0) [ftype] (binary) 
     #Farming Zones
         md.aLandCap         = Param(md.nyear, md.nfzone, initialize=read('aLandCap',option=opt,time=md.nyear), within=Reals) #Land capacity for agriculture [year x fzone] (1000ha)
-        md.aIrrgCost        = Param(md.nfzone, initialize=read('aIrrgCost',option=opt), within=Reals)            #Irrigation cost [fzone] ($/m3)
-        md.aIrrgLoss        = Param(md.nfzone, initialize=read('aIrrgLoss',option=opt), within=Reals)            #Water loss rate from allocated [fzone] (%) 
+        md.aIrrgCost        = Param(md.nfzone, initialize=read('aIrrgCost',option=opt), within=Any)            #Irrigation cost [fzone] ($/m3)
+        md.aIrrgLoss        = Param(md.nfzone, initialize=read('aIrrgLoss',option=opt), within=Any)            #Water loss rate from allocated [fzone] (%) 
     #Cultures
         if md.Options['KckY farmtype']==1: #Kc and kY are defined per farm type
             md.akY          = Param(md.nftype, md.nculture, md.nyphase, initialize=read('akY',option=opt), within=Reals)    #crop yield response phase-specific factor [ftype x culture x yphase](%) 
@@ -209,7 +212,19 @@ class HydroeconomicOptimization():
             md.aYieldMat    = Param(md.nypath, md.nyphase, initialize=read('aYieldMat',option=opt), within=Reals)#yield response path matrix [ypath x yphase]
         if md.Options['Crop choice'] in ('max','once_max'):
             md.aCulMax      = Param(md.nyear, md.nfzone, md.nculture, initialize=read('aCulMax',option=opt, time=md.nyear), within=Reals) #Maximum area per culture and farming zone [fzone x culture] (1000ha)
-        
+        if md.Options['Yield Temp Factor'] == 1:
+            md.aCulTmax     = Param(md.nculture, initialize=read('aCulTmax',option=opt), within=Reals) #max culture temperature (yield = 0 above)
+            md.aCulTop2     = Param(md.nculture, initialize=read('aCulTop2',option=opt), within=Reals) #top2 culture temperature (yield starts decreasing above)
+            md.aCulFlow     = Param(md.nculture, md.nmonth, initialize=read('aCulFlow',option=opt), within=Reals) #culture flowering season (when is sensitive to tmeperature)
+            md.aTmax        = Param(md.ntime, md.ncatch, initialize=read('aTmax',option=opt,time=ttime), within=Reals) #Max monthly temperature [time x catchment] (degree celsius)
+    #Fixed Yields (e.g. aquacrop)
+        if 'FixedYields' in md.Options and md.Options['FixedYields'] in ['mean','max']:
+            md.nayears=Set(initialize=read('ayear',option=opt,index=1))
+            md.nacatch=Set(initialize=read('acatch',option=opt,index=1))
+            md.nacrop=Set(initialize=read('acrop',option=opt,index=1))
+            factor={'mean':'YieldFactor_mean','max':'YieldFactor_max'}[md.Options['FixedYields']]
+            md.aFixedYield=Param(md.nayears, md.nacatch, md.nacrop, initialize=read(factor), within=Reals)
+            
         #%%#####################
         #**Crop Market module**#
         ########################
@@ -284,7 +299,7 @@ class HydroeconomicOptimization():
         if md.Options['Fuels'] ==1:
             md.eOppEff      = Param(md.nopp, initialize=read('eOppEff',option=opt), within=Reals)        #Efficiency of OPP [opp] (kWh_net/kWh_fuel)            
             md.op_fuel      = Param(md.nopp, initialize=read('op_fuel',option=opt), within=Any)        #Fuel of OPP [opp] (id)                 
-        if COOLING == 1:
+        if 'Cooling' in md.Options.keys() and md.Options['Cooling'] == 1:
             md.op_catch     = Param(md.nopp, initialize=read('op_catch',option=opt), within=Any)        #Catchment of OPP (id)
             md.eCoolCoef    = Param(md.nopp, initialize=read('eCoolCoef',option=opt), within=Reals)       #Cooling coefficient (share that is cooled by towers)
             md.eOppDT       = Param(md.nopp, initialize=read('eOppDT',option=opt), within=Reals)          #Maximum temperature delta in river (K)
@@ -575,7 +590,7 @@ class HydroeconomicOptimization():
         #Energy production module: Production costs of hydropower and power plants (O&M, fuel ...)    
         md.xHpProdCost=Expression(md.nyear,md.nhpp, #Hydropower O.M costs [M$]
                 rule=lambda md,y,hp:sum(md.eHppCost[hp]*md.se*md.EeHPPROD[t,pld,hp] 
-                                        for t in _ntime(y) for pld in md.npload for hp in md.nhpp))
+                                        for t in _ntime(y) for pld in md.npload))
         md.xOppProdCost=Expression(md.nyear,md.npmarket, #Othr power plants O.M costs [M$]
                 rule=lambda md,y,pm:sum(md.eOppCost[y,opp]*md.se*md.EeOPPROD[t,pld,opp] 
                                         for t in _ntime(y) for pld in md.npload for opp in md.nopp 
@@ -604,10 +619,11 @@ class HydroeconomicOptimization():
             CAPEX=sum(md.se*md.EeGENCAP[y,pt,pm]*md.eCAPEX[y,pt,pm] for pt in md.nptech) #CAPEX
             FixOPEX=sum(md.eFixOPEX[pt,pm]*sum(md.se*md.EeGENCAP[ky,pt,pm] 
                                                for ky in md.nyear 
-                                               if ky <= y and ky > y-md.eLifeTime[pt,pm]) 
+                                               if ky <= y-md.eConstTime[pt,pm] 
+                                               and ky > y-(md.eLifeTime[pt,pm]+md.eConstTime[pt,pm])) 
                         for pt in md.nptech)
-            if y == yfin:
-                CAPEX+=-sum(md.se*md.EeGENCAP[ky,pt,pm]*md.eCAPEX[y,pt,pm]
+            if y == yfin: #Leftover lifetime is "paid back"
+                CAPEX+=-sum(md.se*md.EeGENCAP[ky,pt,pm]*md.eCAPEX[ky,pt,pm]
                             *max(0,1-(yfin+1-(ky+md.eConstTime[pt,pm]))/md.eLifeTime[pt,pm]) #share of lifetime not used
                             for ky in md.nyear for pt in md.nptech
                             if ky+md.eConstTime[pt,pm] <= yfin)
@@ -625,7 +641,8 @@ class HydroeconomicOptimization():
                                     if md.Options['Energy market'] == 0 else 0)
         md.xPmTransCost=Expression(md.nyear,md.npmarket, #Energy transmission costs [M$]
                 rule=lambda md,y,pm:sum(md.se*md.EeTRANS[t,pld,tl] * md.eTransCost[tl]
-                                        for t in _ntime(y) for pld in md.npload for tl in md.ntransline))
+                                        for t in _ntime(y) for pld in md.npload for tl in md.ntransline
+                                        if md.eTransOut[tl]==pm))
         
         #Activity module
         md.xActBen=Expression(md.nyear,md.njactivity,
@@ -810,7 +827,7 @@ class HydroeconomicOptimization():
         #Reservoir evaporation
         def xResEvap(md,nt,nres): 
             nc=md.res_catch[nres]
-            ET0=max(0,value(md.wET0[nt,nc])-value(md.wRainFall[nt,nc]))*md.mm_to_m
+            ET0=(value(md.wET0[nt,nc])-value(md.wRainFall[nt,nc]))*md.mm_to_m
             if md.Options['Lakes'] == 1 and md.res_type[nres] == 'wetland':
                 if ANALYTICAL ==1:
                     Inflow=(1-md.wFlowLoss[nc])*sum((1-md.wkUP[nres])*md.sw*md.WwOUTFLOW[nt,kc] for kc in md.ncatch if md.catch_ds[kc] == nc)
@@ -831,8 +848,8 @@ class HydroeconomicOptimization():
                                       for kj in md.njactivity if md.j_catch[kj]==nc)
             ActCons             = sum(md.JjPROD[nt,kj]*md.jWatCons[kj] 
                                       for kj in md.njactivity if md.j_catch[kj]==nc)
-            #Net incoming flow from upstream catchments (Mm3)
-            NetInflow           = (1-md.wFlowLoss[nc]) * sum(md.sw*md.WwOUTFLOW[nt,kc] 
+            #Net incoming flow from upstream catchments (Mm3) #new - lag time, initial time steps will just use same outlfow
+            NetInflow           = (1-md.wFlowLoss[nc]) * sum(md.sw*md.WwOUTFLOW[max(nt-md.wLagTime[kc],md.Options['tini']),kc] 
                                                              for kc in md.ncatch if md.catch_ds[kc] == nc) 
             #Catchment Runoff (Mm3) 
             RunOff              = md.wRunOff[nt,nc]
@@ -873,6 +890,8 @@ class HydroeconomicOptimization():
         def water_waterbalance2(md,nt,nc): #Avoids allocation from downstream reservoir to upstream demand [catchment x time] 
             if  sum(1 for ktrans in md.ntransfer if md.transfer_us[ktrans] == nc) + sum(1 for ku in md.nuser if md.user_catch[ku] == nc) + sum(1 for kfz in md.nfzone if md.fzone_catch[kfz]==nc) == 0:
                 return Constraint.Skip #if there is no demand and no transfer project constraint would be empty and is therefore skipped            
+            if len(_nres(nc))>0 and 1 in [md.res_upstream[kres] for kres in _nres(nc)]:
+                return Constraint.Skip #downstream reservoir is able to serve upstream demand thus the catchment water balance is enough 
             ActProd             = sum(md.JjPROD[nt,kj]*md.jWatProd[kj] 
                                       for kj in md.njactivity if md.j_catch[kj]==nc)
             ActCons             = sum(md.JjPROD[nt,kj]*md.jWatCons[kj] 
@@ -935,7 +954,6 @@ class HydroeconomicOptimization():
                 Evap        = md.xResEvap[nt,nla] 
                 Outflow     = md.wAlpha[nla] * AvStor**OUTFLOWPOWER
                 return md.sw*md.WwRSTORAGE[nt,nla] == StorPrev + Inflow + RunOff - Evap - Outflow #+ DEBUG   
-
         
         def water_groundwaterbalance(md,nt,naq):
             GwStorage       = md.WwGWSTORAGE[md.t_prev[nt],naq] if not (md.Options['Initial time step'] == 1 and md.Options['tini'] == nt) else md.wGwIni[naq]
@@ -1025,7 +1043,8 @@ class HydroeconomicOptimization():
                 Relax = sum(md.DUMYEFLOW[kt,nef] for kt in md.ntime) if md.Options['Debug mode'] in [1,2] else 0
                 return TotArea >= TotConst-Relax
         ##Create constraints##    
-        md.env_minflow = Constraint(md.ntime, md.neflow, rule=env_minflow)
+        if md.Options['Eflows']==1:
+            md.env_minflow = Constraint(md.ntime, md.neflow, rule=env_minflow)
         if AREACONSTRAINT=='average':
             md.env_minarea = Constraint(md.neflow, rule=env_minarea_average)
         #%%----------------------------Agricultural module----------------------------
@@ -1067,9 +1086,27 @@ class HydroeconomicOptimization():
         md.xCulPump = Expression(md.nyear,md.nfzone,md.nculture,md.nyphase,
                     rule= lambda md,y,fz,cul,yps:(sum(md.AwGWSUPPLY[kt,fz,cul]*md.xPhaseRatio[kt,fz,cul,yps] for kt in _ntime(y)) 
                     if md.Options['Groundwater']==1 else 0))
+        
+        #Yield Temperature Factor (-)
+        def _xYieldTempFactor(md,y,fz,cul):
+            if 'Yield Temp Factor' in md.Options.keys() and md.Options['Yield Temp Factor']==1:
+                nc=md.fzone_catch[fz]
+                ytf=[max(0,min(1,1-(md.aTmax[kt,nc]-md.aCulTop2[cul])/(md.aCulTmax[cul]-md.aCulTop2[cul]))) 
+                     for kt in md.ntime if md.t_year[kt]==y and md.aCulFlow[cul,md.t_month[kt]]==1] #Yield factor per month of flowering period
+                return min(ytf) if len(ytf)>0 else 1 #select worst impact as total impact
+            else:
+                return 1 #no temperature impact
+        md.xTempFactor = Expression(md.nyear,md.nfzone,md.nculture, rule=_xYieldTempFactor)
+        
         #Crop production [1000t/year]
         def _xCulProd(md,y,fz,cul):
             ft=md.fzone_type[fz]
+            #Aquacrop (or any other model) fixed yields (only for those available)
+            if 'FixedYields' in md.Options.keys() and md.Options['FixedYields'] in ['mean','max']:
+                if (y,fz,cul) in md.aFixedYield:
+                    NetArea=md.aFixedYield[y,fz,cul]*md.xCULAREA[y,fz,cul]
+                    return md.aCulYield[y,md.fzone_type[fz],cul]*NetArea*md.kha_to_Mha/md.kt_to_Mt
+            #Yields using FAO 33 and 56 formula
             #rainfed - turn yield to 0 if yield function returns negative yield             
             if md.aIrrigation[ft]==0: #for irrigated crops this cannot be used as depends on irrigation DV (use debug mode instead)
                 Penalty=sum(md.xkY[ft,cul,kyps]()*(1-md.xCulRain[y,fz,cul,kyps]()/md.xCulDem[y,fz,cul,kyps]())
@@ -1083,9 +1120,10 @@ class HydroeconomicOptimization():
             PenaltyArea=sum(md.xkY[ft,cul,kyps]*(md.xCULAREA[y,fz,cul] 
                                                  -CulWater[kyps]/(md.xCulDem[y,fz,cul,kyps]*md.mm_to_m3perha*md.kha_to_Mha))
                             if md.xCulDem[y,fz,cul,kyps]() != 0 else 0 for kyps in md.nyphase)             
-                
-            #Crop production [1000t/y] rmq: kha_to_Mha, and kt_to_Mt could be used as scaling factors for crop production and cultivated area           
-            return md.aCulYield[y,md.fzone_type[fz],cul]*(md.xCULAREA[y,fz,cul] - PenaltyArea)*md.kha_to_Mha/md.kt_to_Mt #1000t/y
+            #Resulting net area (kha)
+            NetArea=md.xTempFactor[y,fz,cul]()*(md.xCULAREA[y,fz,cul] - PenaltyArea)
+            #Crop production [1000t/y] rmq: kha_to_Mha, and kt_to_Mt could be used as scaling factors for crop production and cultivated area             
+            return md.aCulYield[y,md.fzone_type[fz],cul]*NetArea*md.kha_to_Mha/md.kt_to_Mt #1000t/y
         md.xCulProd = Expression(md.nyear,md.nfzone,md.nculture, rule=_xCulProd)
 
         ##Constraint catalogue## 
@@ -1132,6 +1170,7 @@ class HydroeconomicOptimization():
                 return sum(md.AlCULAREA[ny,nfz,nfd,nfdc,kypt] for kypt in md.nypath) == sum(md.AlCULAREA[md.t_year[md.Options['tini']],nfz,nfd,nfdc,kypt] for kypt in md.nypath)
         
         def agr_cropprodlinearized(md,ny,nfz,ncr): #Crop production [year x fzone x crop]
+        #ADD: WARNING DEPRECIATED FUNCTION !(since )
             nft=md.fzone_type[nfz]
             #linearized yield response: crop production is linked to yield path choice        
             FzoneCropProd = sum(md.aCulYield[ny,nft,md.field_culture[kfd]] # t/ha
@@ -1335,7 +1374,7 @@ class HydroeconomicOptimization():
         if md.Options['Ramping'] == 1:
             md.engy_oppramping  = Constraint(md.ntime, md.npload, md.npload, md.nopp, rule=engy_oppramping)  
             md.engy_genramping  = Constraint(md.ntime, md.npload, md.npload, md.nptech, md.npmarket, rule=engy_genramping)
-        if COOLING == 1:
+        if 'Cooling' in md.Options.keys() and md.Options['Cooling'] == 1:
             md.cooling_const  = Constraint(md.ntime, md.npload, md.nopp, rule=cooling_const)
             
         #%%----------------------------Power market module----------------------------

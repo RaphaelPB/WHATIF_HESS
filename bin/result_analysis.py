@@ -27,8 +27,10 @@ from openpyxl         import load_workbook
 from pyomo.environ    import Constraint, Var
 
 class ResultAnalysis():
+
     #%% Save all model parameters and solved decision variables
     def export_all_DV(self,md,expfolder,scenario='WHATIF_main'):
+        tt=time.time()
         #scaling factors (descale variables)
         def descaling(varname):
             if varname in ['WwRSTORAGE','WwOUTFLOW']:
@@ -41,6 +43,9 @@ class ResultAnalysis():
         if md.Options['Yield water response']=='linearized':
             All_DV['AlCULAREA']={(y,fz,fd,fc):sum(md.AlCULAREA[y,fz,fd,fc,yp].value for yp in md.nypath) for y,fz,fd,fc,yy in md.AlCULAREA}
         All_DV['xCULAREA'] = {index:md.xCULAREA[index]() for index in md.xCULAREA}
+        All_DV['xCULYIELD'] = {index:md.xCulProd[index]()/md.xCULAREA[index]() for index in md.xCULAREA if md.xCULAREA[index]()>0.001} #0.001 empirical threshold to avoid /0 and numerical residues
+        All_DV['xTempFactor'] = {index:md.xTempFactor[index]() for index in md.xTempFactor}
+        #All_DV['xJobs'] = {index:md.xJobs[index]() for index in md.xJobs}
         if md.Options['Crop demand elasticity'] in [0,'linearized']:
             All_DV['AcSUPPLY']={(y,cm,cr):sum(md.AcSUPPLY[y,cm,cr,kcds].value for kcds in md.ncdstep) for y,cm,cr,ccds in md.AcSUPPLY}
         #Constraints
@@ -56,8 +61,14 @@ class ResultAnalysis():
         #oo['scenario']=scenario
         expfile = expfolder + os.sep + scenario + '_DV.txt' 
         pickle.dump(All_DV,open(expfile,"wb"))
+        print('Export all DV ...' +str(round(time.time()-tt))+ ' seconds')
     #%% indicators for IFPRI project
+    #WARNING: assumes there is one crop market and one power market per country (easy to adapt however - TO DO)
     def export_ifpri_indicators(self,md,expfolder,scenario='WHATIF_main'):
+        tt=time.time()
+        #Length of index function
+        def leni(index):
+            return max(1,len(index))
         #correct distored prices
         ObjCoef=[1,1,1]
         if md.Options['Objective_coef']==md.Options['Objective_coef']:
@@ -81,6 +92,27 @@ class ResultAnalysis():
         IDX['Power_newprod_GWh']={
                 (md.t_year[t],t,md.pmarket_country[pm],pt):sum(md.EeGENPROD[t,pld,pt,pm].value*md.se.value for pld in md.npload)
                                 for t in md.ntime for pm in md.npmarket for pt in md.nptech}
+        IDX['Power_prodcost_Md']={
+                (y,md.pmarket_country[pm]):+md.xOppProdCost[y,pm]() 
+                                         +md.xOppFuelCost[y,pm]() + md.xOppCO2Cost[y,pm]() 
+                                         +md.xGenProdCost[y,pm]() + md.xGenFuelCost[y,pm]() 
+                                         +md.xGenCO2Cost[y,pm]() + md.xGenCapCost[y,pm]()
+                                         +sum(md.xHpProdCost[y,hp]() for hp in md.nhpp if md.hp_pmarket[hp]==pm)
+                                for y in md.nyear for pm in md.npmarket}
+        IDX['Power_impval_Md']={
+                (y,md.pmarket_country[pm]):+sum(-md.EeTRANS[t,pld,tl].value
+                                                 *md.dual[md.engy_balance[t,pld,pm]] 
+                                                 *1/ObjCoef[1]*1/md.iDisFact[md.t_year[t]]
+                                                 for t in md.ntime for pld in md.npload for tl in md.ntransline
+                                                 if md.eTransOut[tl]==pm and md.t_year[t]==y)
+                                for y in md.nyear for pm in md.npmarket}
+        IDX['Power_expval_Md']={
+                (y,md.pmarket_country[pm]):+sum(-md.EeTRANS[t,pld,tl].value
+                                                 *md.dual[md.engy_balance[t,pld,pm]]
+                                                 *1/ObjCoef[1]*1/md.iDisFact[md.t_year[t]]
+                                                 for t in md.ntime for pld in md.npload for tl in md.ntransline
+                                                 if md.eTransIn[tl]==pm and md.t_year[t]==y)
+                                for y in md.nyear for pm in md.npmarket}
         #Agriculture Indicators
         agtype={'R':0,'I':1} #R is rainfed, I is irrigated
         IDX['Crop_area_kha']={
@@ -95,6 +127,32 @@ class ResultAnalysis():
                                               *-md.dual[md.agr_cropbalance[y,cm,cr]]
                                               *1/ObjCoef[2]*1/md.iDisFact[y]
                                 for y in md.nyear for cm in md.ncmarket for cr in md.ncrop for at in agtype.keys()}
+        IDX['FZCrop_area_kha']={
+                (y,md.catch_country[nc],cr,at,nc):sum(md.xCULAREA[y,fz,cul]() 
+                                                      for cul in md.nculture for fz in md.nfzone 
+                                                      if md.fzone_catch[fz]==nc and md.culture_crop[cul]==cr and md.aIrrigation[md.fzone_type[fz]]==agtype[at])
+                                for y in md.nyear for cr in md.ncrop for at in agtype.keys() for nc in md.ncatch}
+        IDX['FZCrop_prod_kt']={
+                (y,md.catch_country[nc],cr,at,nc):sum(md.AcPROD[y,fz,cr].value 
+                                                      for fz in md.nfzone if md.fzone_catch[fz]==nc and md.aIrrigation[md.fzone_type[fz]]==agtype[at]) 
+                                for y in md.nyear for cr in md.ncrop for at in agtype.keys() for nc in md.ncatch}
+        IDX['FZCrop_val_Md']={
+                (y,md.catch_country[nc],cr,at,nc):sum(md.AcPROD[y,fz,cr].value 
+                                                      *md.aCropVal[y,md.fzone_cmarket[fz],cr]*md.kt_to_Mt
+                                                      *1/ObjCoef[2]*1/md.iDisFact[y]
+                                                      for fz in md.nfzone 
+                                                      if md.fzone_catch[fz]==nc and md.aIrrigation[md.fzone_type[fz]]==agtype[at])
+                                for y in md.nyear for cr in md.ncrop for at in agtype.keys() for nc in md.ncatch}
+        IDX['Crop_expval_Md']={
+                (y,md.cmarket_country[cm],cr):sum(md.AcTRANS[y,ct,cr].value for ct in md.nctrans if md.aTransIn[ct]==cm)
+                                              *-md.dual[md.agr_cropbalance[y,cm,cr]]
+                                              *1/ObjCoef[2]*1/md.iDisFact[y]
+                                for y in md.nyear for cm in md.ncmarket for cr in md.ncrop}
+        IDX['Crop_impval_Md']={
+                (y,md.cmarket_country[cm],cr):sum(md.AcTRANS[y,ct,cr].value for ct in md.nctrans if md.aTransOut[ct]==cm)
+                                              *-md.dual[md.agr_cropbalance[y,cm,cr]]
+                                              *1/ObjCoef[2]*1/md.iDisFact[y]
+                                for y in md.nyear for cm in md.ncmarket for cr in md.ncrop}
         IDX['Crop_price_dpt']={
                 (y,md.cmarket_country[cm],cr):-1/md.kt_to_Mt*md.dual[md.agr_cropbalance[y,cm,cr]]
                                                *1/ObjCoef[2]*1/md.iDisFact[y]
@@ -113,22 +171,59 @@ class ResultAnalysis():
                         for fz in md.nifzone for cul in md.nculture 
                         if md.fzone_country[fz]==co and md.culture_crop[cul]==cr)
                             for t in md.ntime for co in md.ncountry for cr in md.ncrop}
-        
+        IDX['Cul_Temp_Factor']={
+                (y,md.cmarket_country[cm],cul,at):sum(md.xTempFactor[y,fz,cul]() for fz in md.nfzone if md.fzone_cmarket[fz]==cm and md.aIrrigation[md.fzone_type[fz]]==agtype[at])
+                                                  /max(1,len([1 for fz in md.nfzone if md.fzone_cmarket[fz]==cm and md.aIrrigation[md.fzone_type[fz]]==agtype[at]]))
+                                for y in md.nyear for cm in md.ncmarket for cul in md.nculture for at in agtype.keys()}
         #Water indicator
-        IDX['Runoff_Mm3']={(md.t_year[t],t):sum(md.wRunOff[t,c].value for c in md.ncatch) for t in md.ntime}
-        IDX['ET_mm']={(md.t_year[t],t):sum(md.wET0[t,c].value for c in md.ncatch)/len(md.ncatch) for t in md.ntime}
-        IDX['P_mm']={(md.t_year[t],t):sum(md.wRainFall[t,c].value for c in md.ncatch)/len(md.ncatch) for t in md.ntime}
-                
+        catchcountry={co:[c for c in md.ncatch if md.catch_country[c]==co] for co in md.ncountry}
+        IDX['Runoff_Mm3']={(md.t_year[t],t,co):sum(md.wRunOff[t,c].value for c in catchcountry[co]) 
+                           for t in md.ntime for co in md.ncountry}
+        IDX['ET_mm']={(md.t_year[t],t,co):sum(md.wET0[t,c].value for c in catchcountry[co])/leni(catchcountry[co]) 
+                      for t in md.ntime for co in md.ncountry}
+        IDX['P_mm']={(md.t_year[t],t,co):sum(md.wRainFall[t,c].value for c in catchcountry[co])/leni(catchcountry[co]) 
+                     for t in md.ntime for co in md.ncountry}
+        # IDX['UserDem_p']={(md.t_year[t],t,md.catch_country[c],c):sum(md.WwSUPPLY[t,ku].value for ku in md.nuser if md.user_catch[ku]==c)
+        #                                                          /sum(md.wUserDem[md.t_year[t],md.t_month[t],ku] for ku in md.nuser if md.user_catch[ku]==c)
+        #                   for t in md.ntime for c in md.ncatch}
+        IDX['UserDem']={(md.t_year[t],t,md.catch_country[c],c): sum(md.wUserDem[md.t_year[t],md.t_month[t],ku] for ku in md.nuser if md.user_catch[ku]==c)
+                          for t in md.ntime for c in md.ncatch}
+        IDX['UserSupply']={(md.t_year[t],t,md.catch_country[c],c): sum(md.WwSUPPLY[t,ku].value for ku in md.nuser if md.user_catch[ku]==c)
+                          for t in md.ntime for c in md.ncatch}
+        
+        #Welfare
+        IDX['Power_welfare_Md']={
+                (y,md.pmarket_country[pm]):-md.xOppProdCost[y,pm]() 
+                                         -md.xOppFuelCost[y,pm]() - md.xOppCO2Cost[y,pm]() 
+                                         -md.xGenProdCost[y,pm]() - md.xGenFuelCost[y,pm]() 
+                                         -md.xGenCO2Cost[y,pm]() - md.xGenCapCost[y,pm]()
+                                         -sum(md.xHpProdCost[y,hp]() for hp in md.nhpp if md.hp_pmarket[hp]==pm)
+                                         -IDX['Power_impval_Md'][y,md.pmarket_country[pm]]
+                                         +IDX['Power_expval_Md'][y,md.pmarket_country[pm]]
+                                         +md.xPmBen[y,pm]()
+                                for y in md.nyear for pm in md.npmarket}
+        IDX['Crop_welfare_Md']={
+                (y,md.cmarket_country[cm]):- md.xCmProdCost[y,cm]() 
+                                           - md.xCmMarkMarg[y,cm]()
+                                           - sum(+ md.xFzIrrCost[y,fz]() + md.xFzPumpCost[y,fz]()
+                                                 for fz in md.nifzone if md.fzone_cmarket[fz]==cm)
+                                           - sum(+ md.xFzCulCost[y,fz]() - md.xFzBen[y,fz]()
+                                                 for fz in md.nfzone if md.fzone_cmarket[fz]==cm)
+                                           - sum(IDX['Crop_impval_Md'][y,md.cmarket_country[cm],cr] for cr in md.ncrop)
+                                           + sum(IDX['Crop_expval_Md'][y,md.cmarket_country[cm],cr] for cr in md.ncrop)
+                                           + md.xCmBen[y,cm]()             
+                                for y in md.nyear for cm in md.ncmarket}
         expfile = expfolder + os.sep + scenario + '_ifpri_IDX.txt' 
         pickle.dump(IDX,open(expfile,"wb"))
+        print('indicators for IFPRI project ...' +str(round(time.time()-tt))+ 'seconds')
     #%% Read only Selected result for scenario analysis (WHATIF_scenario.py)
     def selectedresults(self,md,parameters,scenario='WHATIF_main'):
+        tt=time.time()
         #output dictionary
         oo={}
         #Length of index function
         def leni(index):
-            return max(1,len(index))
-        
+            return max(1,len(index))        
         ##SHADOWPRICES##
             #Water shadowprice
         WaterValueShadow        = -sum(md.dual[md.water_waterbalance[t,c]] for t in md.ntime for c in md.ncatch)/(leni(md.ntime)*leni(md.ncatch))
@@ -396,12 +491,15 @@ class ResultAnalysis():
             ' Energy Hpp OetM Cost [M$/year]':  sum(md.xHpProdCost[idx]() for idx in md.xHpProdCost)/leni(md.nyear),
             ' Energy Trans Cost [M$/year]':     sum(md.xPmTransCost[idx]() for idx in md.xPmTransCost)/leni(md.nyear),
             ' jActivity Prod Cost [M$/year]':   sum(-md.xActBen[idx]() for idx in md.xActBen)/leni(md.nyear),
+            ' Jobs [jobs/year]'
             ' Investments NODISCOUNT [M$/year]':sum(-InvestBalance_co[co] for co in md.ncountry)
             } 
         oo['Options']={key:md.Options[key] for key in md.Options}
+        print('Selected results ...' +str(round(time.time()-tt))+ 'seconds')
         return oo 
 #%% Read all results       
-    def readresults(self,md,parameters,solverstatus,PRINT=0,VALIDATION=0,scenario='WHATIF_main'):        
+    def readresults(self,md,parameters,solverstatus,PRINT=0,VALIDATION=0,scenario='WHATIF_main'):
+        tt=time.time()        
         oo={} #initiate result dictionary
         oo['Options']={key:md.Options[key] for key in md.Options}
         #Read parameters function #warning: does not read growing parameters
@@ -607,8 +705,9 @@ class ResultAnalysis():
             print(oo['WaterBalance']['jActivity Water cons [Mm3]'])
             print('Water Balance [Mm3]: InitialStorage + InFlow + ReturnFlow + ActivityProd = UserAll + AgrAll + DownFlow + EndStorage + ET-Losses + ActivityCos')
             print(oo['WaterBalance'][' Balance = 0 [Mm3]'])
-            
+            print('Water balance ...' +str(round(time.time()-tt))+ 'seconds')     
 #%% AGRICULTURE MODULE 
+        tt=time.time()
         #Crop price
         if md.Options['Crop market'] == 1:
             CropPrice   = {(y,fz,cr):-1/md.kt_to_Mt*md.dual[md.agr_cropbalance[y,md.fzone_cmarket[fz],cr]] for cr in md.ncrop for fz in md.nfzone for y in md.nyear}
@@ -793,9 +892,10 @@ class ResultAnalysis():
             print(oo['CropBalance']['Crop jactivity cons [kt/y]'])
             print('Crop balance [kt/y]: CropProd + ActProd = CropTrans - CropLoss - ActCons')
             print(oo['CropBalance'][' Balance = 0 [kt/y]'])
-        
+            print('Crop Balance ...' +str(round(time.time()-tt))+ 'seconds')
 
 #%% ENERGY  
+        tt=time.time()
         #Hydropower plants
         #ADD: WARNING CASE SPECIFIC secondary power VALUE (HppVal/3)
         FIRMPOWER = 95/100 # Percentage of the time the power has to be generated to be firm
@@ -923,8 +1023,9 @@ class ResultAnalysis():
             print(oo['EnergyBalance']['Gen power cap [MW]'])
             print('Generic capacity production [GWh/y]')
             print(oo['EnergyBalance']['Gen power prod [GWh]'])
-                    
+            print('Energy balance ...' +str(round(time.time()-tt))+ 'seconds')        
 #%%ECONOMICS
+        tt=time.time()
         _nuser=lambda co:[u for u in md.nuser if md.user_country[u]==co]
         _nfzone=lambda co:[fz for fz in md.nfzone if md.fzone_country[fz]==co]
         _nifzone=lambda co:[fz for fz in md.nifzone if md.fzone_country[fz]==co]
@@ -1096,8 +1197,10 @@ class ResultAnalysis():
             print(oo['EconomicBalance']['Energy Gen fuel costs [M$]'])
             print('jActivity Balance [M$/y]')
             print(oo['EconomicBalance']['jActivity Blance [M$]'])
+            print('Economic balance ...' +str(round(time.time()-tt))+ 'seconds')
             
 #%% ACTIVITIES
+        tt=time.time()
         oo['jActivity Table']={
             'Activity prod [u/y]':  {j:sum(md.JjPROD[t,j].value 
                                            for t in md.ntime)/leni(md.nyear) for j in md.njactivity},
@@ -1120,11 +1223,13 @@ class ResultAnalysis():
             'Energy Prod [Gwh/y]':  {j:sum(md.JjPROD[t,j].value*md.jPowProd[j]  
                                            for t in md.ntime)/leni(md.nyear) for j in md.njactivity},
             'Crop Prod [kt/y]':     {j:sum(md.JjPROD[t,j].value*md.jCropProd[j] 
+                                           for t in md.ntime)/leni(md.nyear) for j in md.njactivity},
+            'Jobs [jobs/y]':        {j:sum(md.JjPROD[t,j].value*md.jActJob[j] 
                                            for t in md.ntime)/leni(md.nyear) for j in md.njactivity}
                                 }
         
         oo['jActivity_t']={t:{j:md.JjPROD[t,j].value for j in md.njactivity} for t in md.ntime}
-#%% YEARLY TRENDS - exclude South Africa - #ADD CASE SPECIFIC !!!
+#%% YEARLY TRENDS - DEPRECIATED
 #Capacity
         YearlyEnergy={'Power demand [GWh/y]': oo['EnergyBalance_y2']['Power demand [GWh]'],
                       'Unserved demand [GWh/y]': oo['EnergyBalance_y2']['Unserved demand [GWh]'],
@@ -1143,10 +1248,10 @@ class ResultAnalysis():
                        } 
         for pt in md.nptech:
             YearlyProd[pt+' prod [GWh/y]'] = {y: sum(md.se.value*md.EeGENPROD[t,pld,pt,pm].value for t in md.ntime for pld in md.npload for pm in md.npmarket if md.t_year[t]==y and pm != 'PmSouthAfrica')
-                                                          +sum(oo['PpProd_pp_y'][y][op] for op in md.nopp if md.op_ptech[op]==pt and md.op_pmarket[op]!='PmSouthAfrica')
+                                                          +sum(oo['PpProd_pp_y'][y][op] for op in md.nopp if md.op_ptech[op]==pt)
                                                         for y in md.nyear}
             YearlyCapacity[pt+' capacity [MW]'] = {y:  sum(md.se.value*md.EeGENCAP[ky,pt,pm].value for ky in md.nyear for pm in md.npmarket if ky <= y and ky >= y-md.eLifeTime[pt,pm] and pm != 'PmSouthAfrica')
-                                                    +sum(md.eOppCap[y,op] for op in md.nopp if md.op_ptech[op]==pt and md.op_pmarket[op]!='PmSouthAfrica')
+                                                    +sum(md.eOppCap[y,op] for op in md.nopp if md.op_ptech[op]==pt)
                                                  for y in md.nyear}
         oo['YearlyEnergy'] = YearlyEnergy
         oo['YearlyProd'] = YearlyProd
@@ -1211,9 +1316,11 @@ class ResultAnalysis():
                                                   for y in md.nyear} for inv in md.ninvest}
             #oo['Investments_co   
 #%%RETURN
+        print('Other stuff ...' +str(round(time.time()-tt))+ 'seconds')
         return oo
 #%% POWER BI visualization
     def export_index_mapping(self,md,expfolder):
+        tt=time.time()
         #mapping function - export to .csv
         def simple_map(i1,i2,param_name):
             file = os.path.join(expfolder,param_name+'.csv')
@@ -1222,10 +1329,10 @@ class ResultAnalysis():
                 i1_i2=pd.DataFrame.from_dict(param,orient='index')
                 i1_i2.index.names=[i1]
                 i1_i2.columns=[i2]
-                i1_i2.to_csv(file,sep=';',decimal=',')
+                i1_i2.to_csv(file,sep=',',decimal=';')
             else: #generate empty file for power BI
                 i1_i2 = pd.DataFrame(columns=[i1,i2])
-                i1_i2.to_csv(file,sep=';',decimal=',',index=False)
+                i1_i2.to_csv(file,sep=',',decimal=';',index=False)
         #create output folder
         if not os.path.exists(expfolder):
             os.makedirs(expfolder)
@@ -1248,6 +1355,7 @@ class ResultAnalysis():
         simple_map('nhpp','npmarket','hp_pmarket')
         simple_map('nopp','npmarket','op_pmarket')
         simple_map('npmarket','ncountry','pmarket_country')
+        print('Export index mapping ...' +str(round(time.time()-tt))+ ' seconds')
 
     def export_mass_balances(self,oo,expfolder,scenario='WHATIF_main'):
         #Exports masss balances in a specific format to be read by the 'WHATIF_compare_result' and exported to powerBI 
@@ -1325,6 +1433,7 @@ class ResultAnalysis():
 
 #%% Export all sheets to excel
     def export_to_excel(self,oo,exppath,VALIDATION=0,NEWSHEET=1):
+        tt=time.time()
         ## oo = output from function read_results (processed results from model)
         ## exppath = path of the excel file to export to
         ## NEWSHEET: 1= creates a new sheet (loose formatting of existing sheet), 0=updates existing sheet (keeps formatting)
@@ -1466,10 +1575,12 @@ class ResultAnalysis():
                          ['Activities', 'Activities'])
         
         #Save excel files
+        print('Export to excel ...' +str(round(time.time()-tt))+ ' seconds')
         writer.save()
 
 #%% Export scenarios main results in summary excel
     def export_scenario_analysis(self,scenarios,ref_scen,parallelresults,expfolder):
+        tt=time.time()
         #Assembles results from different scenarios and exports to excel
         ##scenarios = [scen_1,...,scen_n] list of scenario names
         ##ref_scen = {scen_1:refscen_1,...,scen_n:refscen_n} reference scenario to show differential values (A-B)
@@ -1536,4 +1647,5 @@ class ResultAnalysis():
         #Options
         self.exportsheet(writer,'Options',[oo['Options']],['OPTIONS'],index=[0])
         writer.save()
+        print('Export scenario analysis ...' +str(round(time.time()-tt))+ ' seconds')
         
